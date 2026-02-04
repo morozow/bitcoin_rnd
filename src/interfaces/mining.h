@@ -123,13 +123,16 @@ public:
    /**
      * Construct a new block template.
      *
-     * During node initialization, this will wait until the tip is connected.
-     *
      * @param[in] options options for creating the block
+     * @param[in] cooldown wait for tip to be connected and IBD to complete.
+     *                     If the best header is ahead of the tip, wait for the
+     *                     tip to catch up. It's recommended to disable this on
+     *                     regtest and signets with only one miner, as these
+     *                     could stall.
      * @retval BlockTemplate a block template.
      * @retval std::nullptr if the node is shut down.
      */
-    virtual std::unique_ptr<BlockTemplate> createNewBlock(const node::BlockCreateOptions& options = {}) = 0;
+    virtual std::unique_ptr<BlockTemplate> createNewBlock(const node::BlockCreateOptions& options = {}, bool cooldown = true) = 0;
 
     /**
      * Checks if a given block is valid.
