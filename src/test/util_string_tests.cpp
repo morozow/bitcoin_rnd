@@ -8,7 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <test/util/common.h>
-#include <test/util/setup_common.h>
+#include <tinyformat.h>
 
 using namespace util;
 using util::detail::CheckNumFormatSpecifiers;
