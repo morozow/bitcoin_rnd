@@ -232,14 +232,14 @@ jobs:
         run: py -3 .github/ci-windows.py "standard" github_import_vs_env
 
       - name: Get tool information
-        shell: pwsh
         run: |
-          cmake -version | Tee-Object -FilePath "cmake_version"
-          Write-Output "---"
-          msbuild -version | Tee-Object -FilePath "msbuild_version"
-          $env:VCToolsVersion | Tee-Object -FilePath "toolset_version"
+          set -o errexit -o pipefail -o xtrace -o nounset
+
+          cmake -version | tee cmake_version
+          echo '---'
+          msbuild.exe -version | tee msbuild_version
+          echo "${VCToolsVersion-}" | tee toolset_version
           py -3 --version
-          Write-Host "PowerShell version $($PSVersionTable.PSVersion.ToString())"
           bash --version
 
       - name: Using vcpkg with MSBuild
