@@ -256,6 +256,7 @@ class Binaries:
             "valgrind",
             f"--suppressions={suppressions_file}",
             "--gen-suppressions=all",
+            "--trace-children=yes",  # Needed for 'bitcoin' wrapper
             "--exit-on-first-error=yes",
             "--error-exitcode=1",
             "--quiet",
