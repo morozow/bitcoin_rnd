@@ -1043,7 +1043,7 @@ FUZZ_TARGET(clusterlin_linearize)
     }
 
     // Invoke Linearize().
-    max_cost &= 0x7ffff;
+    max_cost &= 0x3fffff;
     auto [linearization, optimal, cost] = Linearize(
         /*depgraph=*/depgraph,
         /*max_cost=*/max_cost,
@@ -1242,7 +1242,7 @@ FUZZ_TARGET(clusterlin_postlinearize_tree)
 
     // Try to find an even better linearization directly. This must not change the diagram for the
     // same reason.
-    auto [opt_linearization, _optimal, _cost] = Linearize(depgraph_tree, 100000, rng_seed, IndexTxOrder{}, post_linearization);
+    auto [opt_linearization, _optimal, _cost] = Linearize(depgraph_tree, 1000000, rng_seed, IndexTxOrder{}, post_linearization);
     auto opt_chunking = ChunkLinearization(depgraph_tree, opt_linearization);
     auto cmp_opt = CompareChunks(opt_chunking, post_chunking);
     assert(cmp_opt == 0);

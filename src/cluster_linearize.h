@@ -486,9 +486,9 @@ public:
     inline void StartOptimizingBegin() noexcept {}
     inline void StartOptimizingEnd(int num_chunks) noexcept {}
     inline void ActivateBegin() noexcept {}
-    inline void ActivateEnd(int num_deps) noexcept { m_cost += num_deps + 1; }
+    inline void ActivateEnd(int num_deps) noexcept { m_cost += 38 * num_deps + 38; }
     inline void DeactivateBegin() noexcept {}
-    inline void DeactivateEnd(int num_deps) noexcept { m_cost += num_deps + 1; }
+    inline void DeactivateEnd(int num_deps) noexcept { m_cost += 38 * num_deps + 38; }
     inline void MergeChunksBegin() noexcept {}
     inline void MergeChunksMid(int num_txns) noexcept {}
     inline void MergeChunksEnd(int num_steps) noexcept {}
