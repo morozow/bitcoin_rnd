@@ -310,7 +310,7 @@ class P2PPrivateBroadcast(BitcoinTestFramework):
         peers = pending[0]["peers"]
         assert len(peers) >= NUM_PRIVATE_BROADCAST_PER_TX
         assert all("address" in p and "sent" in p for p in peers)
-        assert_greater_than_or_equal(sum(1 for p in peers if "received" in p), NUM_PRIVATE_BROADCAST_PER_TX)
+        assert_greater_than_or_equal(sum(1 for p in peers if "received" in p), broadcasts_to_expect)
 
     def run_test(self):
         tx_originator = self.nodes[0]
