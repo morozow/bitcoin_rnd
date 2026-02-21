@@ -1742,7 +1742,7 @@ public:
 /** Find or improve a linearization for a cluster.
  *
  * @param[in] depgraph            Dependency graph of the cluster to be linearized.
- * @param[in] max_iterations      Upper bound on the amount of work that will be done.
+ * @param[in] max_cost            Upper bound on the amount of work that will be done.
  * @param[in] rng_seed            A random number seed to control search order. This prevents peers
  *                                from predicting exactly which clusters would be hard for us to
  *                                linearize.
@@ -1762,7 +1762,7 @@ public:
 template<typename SetType>
 std::tuple<std::vector<DepGraphIndex>, bool, uint64_t> Linearize(
     const DepGraph<SetType>& depgraph,
-    uint64_t max_iterations,
+    uint64_t max_cost,
     uint64_t rng_seed,
     const StrongComparator<DepGraphIndex> auto& fallback_order,
     std::span<const DepGraphIndex> old_linearization = {},
@@ -1778,23 +1778,23 @@ std::tuple<std::vector<DepGraphIndex>, bool, uint64_t> Linearize(
     }
     // Make improvement steps to it until we hit the max_iterations limit, or an optimal result
     // is found.
-    if (forest.GetCost() < max_iterations) {
+    if (forest.GetCost() < max_cost) {
         forest.StartOptimizing();
         do {
             if (!forest.OptimizeStep()) break;
-        } while (forest.GetCost() < max_iterations);
+        } while (forest.GetCost() < max_cost);
     }
     // Make chunk minimization steps until we hit the max_iterations limit, or all chunks are
     // minimal.
     bool optimal = false;
-    if (forest.GetCost() < max_iterations) {
+    if (forest.GetCost() < max_cost) {
         forest.StartMinimizing();
         do {
             if (!forest.MinimizeStep()) {
                 optimal = true;
                 break;
             }
-        } while (forest.GetCost() < max_iterations);
+        } while (forest.GetCost() < max_cost);
     }
     return {forest.GetLinearization(fallback_order), optimal, forest.GetCost()};
 }
