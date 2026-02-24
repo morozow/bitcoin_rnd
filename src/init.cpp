@@ -1206,8 +1206,8 @@ bool AppInitLockDirectories()
 
 bool AppInitInterfaces(NodeContext& node)
 {
-    node.chain = node.init->makeChain();
-    node.mining = node.init->makeMining();
+    node.chain = interfaces::MakeChain(node);
+    node.mining = interfaces::MakeMining(node);
     return true;
 }
 
