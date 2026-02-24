@@ -261,29 +261,6 @@ std::unique_ptr<T> MakeNoLogFileContext(const ChainType chain_type = ChainType::
 
 CBlock getBlock13b8a();
 
-// Make types usable in BOOST_CHECK_* @{
-namespace std {
-template <typename T> requires std::is_enum_v<T>
-inline std::ostream& operator<<(std::ostream& os, const T& e)
-{
-    return os << static_cast<std::underlying_type_t<T>>(e);
-}
-
-template <typename T>
-inline std::ostream& operator<<(std::ostream& os, const std::optional<T>& v)
-{
-    return v ? os << *v
-             : os << "std::nullopt";
-}
-} // namespace std
-
-std::ostream& operator<<(std::ostream& os, const arith_uint256& num);
-std::ostream& operator<<(std::ostream& os, const uint160& num);
-std::ostream& operator<<(std::ostream& os, const uint256& num);
-std::ostream& operator<<(std::ostream& os, const Txid& txid);
-std::ostream& operator<<(std::ostream& os, const Wtxid& wtxid);
-// @}
-
 /**
  * BOOST_CHECK_EXCEPTION predicates to check the specific validation error.
  * Use as
