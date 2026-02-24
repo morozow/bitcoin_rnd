@@ -1207,7 +1207,9 @@ bool AppInitLockDirectories()
 bool AppInitInterfaces(NodeContext& node)
 {
     node.chain = interfaces::MakeChain(node);
-    node.mining = interfaces::MakeMining(node);
+    // Specify wait_loaded=false so internal mining interface can be initialized
+    // on early startup and does not need to be tied to chainstate loading.
+    node.mining = interfaces::MakeMining(node, /*wait_loaded=*/false);
     return true;
 }
 
