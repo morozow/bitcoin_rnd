@@ -4747,6 +4747,17 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             ReadCompactSize(vRecv); // ignore tx count; assume it is 0.
         }
 
+        // stdio_bus hook: OnHeaders (shadow mode observability)
+        if (m_opts.stdio_bus_hooks->Enabled() && !headers.empty()) {
+            node::HeadersEvent ev{
+                .peer_id = pfrom.GetId(),
+                .count = headers.size(),
+                .first_prev_hash = headers[0].hashPrevBlock,
+                .received_us = node::GetMonotonicTimeUs()
+            };
+            m_opts.stdio_bus_hooks->OnHeaders(ev);
+        }
+
         ProcessHeadersMessage(pfrom, peer, std::move(headers), /*via_compact_block=*/false);
 
         // Check if the headers presync progress needs to be reported to validation.
@@ -4778,6 +4789,20 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         vRecv >> TX_WITH_WITNESS(*pblock);
 
         LogDebug(BCLog::NET, "received block %s peer=%d\n", pblock->GetHash().ToString(), pfrom.GetId());
+
+        // stdio_bus hook: OnBlockReceived (shadow mode observability)
+        if (m_opts.stdio_bus_hooks->Enabled()) {
+            const CBlockIndex* prev_idx{WITH_LOCK(m_chainman.GetMutex(), return m_chainman.m_blockman.LookupBlockIndex(pblock->hashPrevBlock))};
+            node::BlockReceivedEvent ev{
+                .peer_id = pfrom.GetId(),
+                .hash = pblock->GetHash(),
+                .height = prev_idx ? prev_idx->nHeight + 1 : -1,
+                .size_bytes = ::GetSerializeSize(TX_WITH_WITNESS(*pblock)),
+                .tx_count = pblock->vtx.size(),
+                .received_us = node::GetMonotonicTimeUs()
+            };
+            m_opts.stdio_bus_hooks->OnBlockReceived(ev);
+        }
 
         const CBlockIndex* prev_block{WITH_LOCK(m_chainman.GetMutex(), return m_chainman.m_blockman.LookupBlockIndex(pblock->hashPrevBlock))};
 
@@ -5173,6 +5198,17 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
         msg.m_recv.size(),
         msg.m_recv.data()
     );
+
+    // stdio_bus hook: OnMessage (shadow mode observability)
+    if (m_opts.stdio_bus_hooks->Enabled()) {
+        node::MessageEvent ev{
+            .peer_id = node.GetId(),
+            .msg_type = msg.m_type,
+            .size_bytes = msg.m_recv.size(),
+            .received_us = node::GetMonotonicTimeUs()
+        };
+        m_opts.stdio_bus_hooks->OnMessage(ev);
+    }
 
     if (m_opts.capture_messages) {
         CaptureMessage(node.addr, msg.m_type, MakeUCharSpan(msg.m_recv), /*is_incoming=*/true);
