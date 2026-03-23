@@ -77,8 +77,6 @@ public:
     void OnRpcHttpEnqueue(const RpcHttpEnqueueEvent& ev) override;
     void OnRpcHttpDispatch(const RpcHttpDispatchEvent& ev) override;
     void OnRpcCallLifecycle(const RpcCallLifecycleEvent& ev) override;
-    void OnRpcBackpressure(const RpcBackpressureEvent& ev) override;
-    void OnP2PRpcInterferenceSnapshot(const P2PRpcInterferenceSnapshotEvent& ev) override;
 
     // ========== Lifecycle ==========
 
@@ -109,12 +107,10 @@ private:
         TxAdmissionEvent,
         MsgHandlerLoopEvent,
         RpcCallEvent,
-        // Phase 5: P2P/RPC Degradation
+        // Phase 5: P2P/RPC Degradation (simplified)
         RpcHttpEnqueueEvent,
         RpcHttpDispatchEvent,
-        RpcCallLifecycleEvent,
-        RpcBackpressureEvent,
-        P2PRpcInterferenceSnapshotEvent
+        RpcCallLifecycleEvent
     >;
 
     /** Try to enqueue an event (non-blocking) */

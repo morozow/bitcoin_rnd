@@ -12,7 +12,6 @@
 #include <netbase.h>
 #include <node/interface_ui.h>
 #include <node/stdio_bus_hooks.h>
-#include <node/stdio_bus_rpc_metrics.h>
 #include <rpc/protocol.h>
 #include <sync.h>
 #include <util/check.h>
@@ -283,32 +282,15 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
                 ev.queue_depth = current_queue_depth;
                 ev.max_queue_depth = g_max_queue_depth;
                 ev.admitted = false;
-                ev.reject_reason = node::RpcBackpressureReason::QueueFull;
                 g_stdio_bus_hooks->OnRpcHttpEnqueue(ev);
-                
-                // Also fire backpressure event
-                node::RpcBackpressureEvent bp_ev;
-                bp_ev.request_id = request_id;
-                bp_ev.method = ""; // Unknown at this point
-                bp_ev.timestamp_us = received_us;
-                bp_ev.decision = node::RpcBackpressureDecision::Reject;
-                bp_ev.reason = node::RpcBackpressureReason::QueueFull;
-                bp_ev.queue_depth = current_queue_depth;
-                bp_ev.active_rpc_calls = node::g_stdio_bus_rpc_metrics ? 
-                    node::g_stdio_bus_rpc_metrics->GetActiveRpcCalls() : 0;
-                bp_ev.p2p_load_score = 0.0; // TODO: Get from P2P metrics
-                bp_ev.method_calls_last_sec = 0;
-                g_stdio_bus_hooks->OnRpcBackpressure(bp_ev);
-            }
-            
-            // Update metrics
-            if (node::g_stdio_bus_rpc_metrics) {
-                node::g_stdio_bus_rpc_metrics->RecordHttpEnqueue(false, current_queue_depth, g_max_queue_depth);
             }
             
             hreq->WriteReply(HTTP_SERVICE_UNAVAILABLE, "Work queue depth exceeded");
             return;
         }
+
+        // Store request_id in HTTPRequest for correlation with RPC lifecycle
+        hreq->SetStdioBusRequestId(request_id);
 
         // Phase 5: Fire enqueue event for admitted request
         if (g_stdio_bus_hooks && g_stdio_bus_hooks->Enabled()) {
@@ -320,13 +302,7 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
             ev.queue_depth = current_queue_depth;
             ev.max_queue_depth = g_max_queue_depth;
             ev.admitted = true;
-            ev.reject_reason = node::RpcBackpressureReason::None;
             g_stdio_bus_hooks->OnRpcHttpEnqueue(ev);
-        }
-        
-        // Update metrics
-        if (node::g_stdio_bus_rpc_metrics) {
-            node::g_stdio_bus_rpc_metrics->RecordHttpEnqueue(true, current_queue_depth, g_max_queue_depth);
         }
 
         // Capture timing for dispatch event
@@ -340,16 +316,7 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
                 ev.request_id = request_id;
                 ev.enqueued_us = enqueued_us;
                 ev.dispatched_us = node::GetMonotonicTimeUs();
-                ev.worker_id = 0; // TODO: Get actual worker ID
-                ev.active_workers = 0; // TODO: Get from thread pool
-                ev.total_workers = 0; // TODO: Get from thread pool
                 g_stdio_bus_hooks->OnRpcHttpDispatch(ev);
-            }
-            
-            // Update metrics
-            if (node::g_stdio_bus_rpc_metrics) {
-                int64_t queue_wait_us = node::GetMonotonicTimeUs() - enqueued_us;
-                node::g_stdio_bus_rpc_metrics->RecordHttpDispatch(queue_wait_us);
             }
             
             std::string err_msg;

@@ -81,6 +81,7 @@ private:
     struct evhttp_request* req;
     const util::SignalInterrupt& m_interrupt;
     bool replySent;
+    int64_t m_stdio_bus_request_id{-1};  ///< Request ID for stdio_bus event correlation
 
 public:
     explicit HTTPRequest(struct evhttp_request* req, const util::SignalInterrupt& interrupt, bool replySent = false);
@@ -93,6 +94,10 @@ public:
         HEAD,
         PUT
     };
+
+    /** Get/set stdio_bus request ID for event correlation */
+    int64_t GetStdioBusRequestId() const { return m_stdio_bus_request_id; }
+    void SetStdioBusRequestId(int64_t id) { m_stdio_bus_request_id = id; }
 
     /** Get requested URI.
      */

@@ -146,7 +146,7 @@ public:
         m_rpc_calls.push_back(ev);
     }
     
-    // Phase 5: P2P/RPC Degradation hooks
+    // Phase 5: P2P/RPC Degradation hooks (simplified)
     void OnRpcHttpEnqueue(const RpcHttpEnqueueEvent& ev) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_rpc_http_enqueue.push_back(ev);
@@ -160,16 +160,6 @@ public:
     void OnRpcCallLifecycle(const RpcCallLifecycleEvent& ev) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_rpc_call_lifecycle.push_back(ev);
-    }
-    
-    void OnRpcBackpressure(const RpcBackpressureEvent& ev) override {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_rpc_backpressure.push_back(ev);
-    }
-    
-    void OnP2PRpcInterferenceSnapshot(const P2PRpcInterferenceSnapshotEvent& ev) override {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_interference_snapshots.push_back(ev);
     }
     
     // Accessors
@@ -194,12 +184,10 @@ private:
     std::vector<TxAdmissionEvent> m_tx_admissions;
     std::vector<MsgHandlerLoopEvent> m_loop_events;
     std::vector<RpcCallEvent> m_rpc_calls;
-    // Phase 5
+    // Phase 5 (simplified)
     std::vector<RpcHttpEnqueueEvent> m_rpc_http_enqueue;
     std::vector<RpcHttpDispatchEvent> m_rpc_http_dispatch;
     std::vector<RpcCallLifecycleEvent> m_rpc_call_lifecycle;
-    std::vector<RpcBackpressureEvent> m_rpc_backpressure;
-    std::vector<P2PRpcInterferenceSnapshotEvent> m_interference_snapshots;
 };
 
 BOOST_AUTO_TEST_CASE(recording_hooks_capture_events)
@@ -429,54 +417,8 @@ BOOST_AUTO_TEST_CASE(latency_measurement)
 }
 
 // ============================================================================
-// Phase 5: P2P/RPC Degradation Tests (#18678)
+// Phase 5: P2P/RPC Degradation Tests (#18678) - Simplified
 // ============================================================================
-
-BOOST_AUTO_TEST_CASE(rpc_method_priority_classification)
-{
-    // High priority methods
-    BOOST_CHECK(ClassifyRpcMethodPriority("stop") == RpcMethodPriority::High);
-    BOOST_CHECK(ClassifyRpcMethodPriority("getblockchaininfo") == RpcMethodPriority::High);
-    BOOST_CHECK(ClassifyRpcMethodPriority("getnetworkinfo") == RpcMethodPriority::High);
-    BOOST_CHECK(ClassifyRpcMethodPriority("ping") == RpcMethodPriority::High);
-    BOOST_CHECK(ClassifyRpcMethodPriority("help") == RpcMethodPriority::High);
-    
-    // Low priority methods
-    BOOST_CHECK(ClassifyRpcMethodPriority("scantxoutset") == RpcMethodPriority::Low);
-    BOOST_CHECK(ClassifyRpcMethodPriority("rescanblockchain") == RpcMethodPriority::Low);
-    BOOST_CHECK(ClassifyRpcMethodPriority("importwallet") == RpcMethodPriority::Low);
-    BOOST_CHECK(ClassifyRpcMethodPriority("getblock") == RpcMethodPriority::Low);
-    
-    // Medium priority (default)
-    BOOST_CHECK(ClassifyRpcMethodPriority("sendtoaddress") == RpcMethodPriority::Medium);
-    BOOST_CHECK(ClassifyRpcMethodPriority("getnewaddress") == RpcMethodPriority::Medium);
-    BOOST_CHECK(ClassifyRpcMethodPriority("unknown_method") == RpcMethodPriority::Medium);
-}
-
-BOOST_AUTO_TEST_CASE(rpc_method_priority_to_string)
-{
-    BOOST_CHECK(RpcMethodPriorityToString(RpcMethodPriority::High) == "high");
-    BOOST_CHECK(RpcMethodPriorityToString(RpcMethodPriority::Medium) == "medium");
-    BOOST_CHECK(RpcMethodPriorityToString(RpcMethodPriority::Low) == "low");
-}
-
-BOOST_AUTO_TEST_CASE(rpc_backpressure_decision_to_string)
-{
-    BOOST_CHECK(RpcBackpressureDecisionToString(RpcBackpressureDecision::Admit) == "admit");
-    BOOST_CHECK(RpcBackpressureDecisionToString(RpcBackpressureDecision::Reject) == "reject");
-    BOOST_CHECK(RpcBackpressureDecisionToString(RpcBackpressureDecision::Throttle) == "throttle");
-    BOOST_CHECK(RpcBackpressureDecisionToString(RpcBackpressureDecision::Prioritize) == "prioritize");
-}
-
-BOOST_AUTO_TEST_CASE(rpc_backpressure_reason_to_string)
-{
-    BOOST_CHECK(RpcBackpressureReasonToString(RpcBackpressureReason::None) == "none");
-    BOOST_CHECK(RpcBackpressureReasonToString(RpcBackpressureReason::QueueFull) == "queue_full");
-    BOOST_CHECK(RpcBackpressureReasonToString(RpcBackpressureReason::P2PLoad) == "p2p_load");
-    BOOST_CHECK(RpcBackpressureReasonToString(RpcBackpressureReason::MethodThrottle) == "method_throttle");
-    BOOST_CHECK(RpcBackpressureReasonToString(RpcBackpressureReason::LowPriority) == "low_priority");
-    BOOST_CHECK(RpcBackpressureReasonToString(RpcBackpressureReason::SystemLoad) == "system_load");
-}
 
 BOOST_AUTO_TEST_CASE(generate_request_id_unique)
 {
@@ -527,8 +469,7 @@ BOOST_AUTO_TEST_CASE(rpc_http_enqueue_event_fields)
         .received_us = 1000000,
         .queue_depth = 10,
         .max_queue_depth = 64,
-        .admitted = true,
-        .reject_reason = RpcBackpressureReason::None
+        .admitted = true
     };
     
     BOOST_CHECK_EQUAL(ev.request_id, 12345);
@@ -537,7 +478,6 @@ BOOST_AUTO_TEST_CASE(rpc_http_enqueue_event_fields)
     BOOST_CHECK_EQUAL(ev.queue_depth, 10);
     BOOST_CHECK_EQUAL(ev.max_queue_depth, 64);
     BOOST_CHECK(ev.admitted);
-    BOOST_CHECK(ev.reject_reason == RpcBackpressureReason::None);
 }
 
 BOOST_AUTO_TEST_CASE(rpc_http_dispatch_event_fields)
@@ -545,17 +485,11 @@ BOOST_AUTO_TEST_CASE(rpc_http_dispatch_event_fields)
     RpcHttpDispatchEvent ev{
         .request_id = 12345,
         .enqueued_us = 1000000,
-        .dispatched_us = 1001000,
-        .worker_id = 3,
-        .active_workers = 8,
-        .total_workers = 16
+        .dispatched_us = 1001000
     };
     
     BOOST_CHECK_EQUAL(ev.request_id, 12345);
     BOOST_CHECK_EQUAL(ev.dispatched_us - ev.enqueued_us, 1000); // 1ms queue wait
-    BOOST_CHECK_EQUAL(ev.worker_id, 3);
-    BOOST_CHECK_EQUAL(ev.active_workers, 8);
-    BOOST_CHECK_EQUAL(ev.total_workers, 16);
 }
 
 BOOST_AUTO_TEST_CASE(rpc_call_lifecycle_event_fields)
@@ -564,87 +498,62 @@ BOOST_AUTO_TEST_CASE(rpc_call_lifecycle_event_fields)
         .request_id = 12345,
         .method = "getblockchaininfo",
         .peer_addr = "127.0.0.1:8332",
-        .priority = RpcMethodPriority::High,
-        .http_received_us = 1000000,
-        .queue_entered_us = 1000100,
-        .dispatch_us = 1001000,
-        .parse_start_us = 1001100,
         .exec_start_us = 1001200,
         .exec_end_us = 1002000,
-        .response_sent_us = 1002100,
         .success = true,
         .http_status = 200,
         .response_size = 1024
     };
     
     BOOST_CHECK_EQUAL(ev.method, "getblockchaininfo");
-    BOOST_CHECK(ev.priority == RpcMethodPriority::High);
     BOOST_CHECK(ev.success);
     BOOST_CHECK_EQUAL(ev.http_status, 200);
     
-    // Calculate latency breakdown
-    int64_t queue_wait = ev.dispatch_us - ev.queue_entered_us;
+    // Calculate exec time
     int64_t exec_time = ev.exec_end_us - ev.exec_start_us;
-    int64_t total_latency = ev.response_sent_us - ev.http_received_us;
-    
-    BOOST_CHECK_EQUAL(queue_wait, 900);
     BOOST_CHECK_EQUAL(exec_time, 800);
-    BOOST_CHECK_EQUAL(total_latency, 2100);
 }
 
-BOOST_AUTO_TEST_CASE(rpc_backpressure_event_fields)
+BOOST_AUTO_TEST_CASE(request_id_correlation)
 {
-    RpcBackpressureEvent ev{
-        .request_id = 12345,
-        .method = "scantxoutset",
-        .timestamp_us = 1000000,
-        .decision = RpcBackpressureDecision::Reject,
-        .reason = RpcBackpressureReason::QueueFull,
-        .queue_depth = 64,
-        .active_rpc_calls = 16,
-        .p2p_load_score = 0.85,
-        .method_calls_last_sec = 100
+    // Test that same request_id can be used across all three events
+    int64_t request_id = GenerateRequestId();
+    
+    RpcHttpEnqueueEvent enqueue_ev{
+        .request_id = request_id,
+        .uri = "/",
+        .peer_addr = "127.0.0.1:8332",
+        .received_us = 1000000,
+        .queue_depth = 5,
+        .max_queue_depth = 64,
+        .admitted = true
     };
     
-    BOOST_CHECK_EQUAL(ev.method, "scantxoutset");
-    BOOST_CHECK(ev.decision == RpcBackpressureDecision::Reject);
-    BOOST_CHECK(ev.reason == RpcBackpressureReason::QueueFull);
-    BOOST_CHECK_EQUAL(ev.queue_depth, 64);
-    BOOST_CHECK_EQUAL(ev.active_rpc_calls, 16);
-    BOOST_CHECK(ev.p2p_load_score > 0.8);
-}
-
-BOOST_AUTO_TEST_CASE(p2p_rpc_interference_snapshot_event_fields)
-{
-    P2PRpcInterferenceSnapshotEvent ev{
-        .timestamp_us = 1000000,
-        .snapshot_interval_us = 1000000, // 1 second
-        .p2p_messages_processed = 500,
-        .p2p_processing_us = 250000,
-        .p2p_queue_depth = 10,
-        .connected_peers = 8,
-        .rpc_calls_completed = 100,
-        .rpc_total_latency_us = 500000,
-        .rpc_queue_depth = 5,
-        .active_rpc_calls = 3,
-        .rpc_latency_p50_us = 2000,
-        .rpc_latency_p95_us = 10000,
-        .rpc_latency_p99_us = 50000,
-        .p2p_load_score = 0.5,
-        .rpc_degradation_score = 0.2,
-        .interference_correlation = 0.75
+    RpcHttpDispatchEvent dispatch_ev{
+        .request_id = request_id,
+        .enqueued_us = 1000000,
+        .dispatched_us = 1001000
     };
     
-    BOOST_CHECK_EQUAL(ev.p2p_messages_processed, 500);
-    BOOST_CHECK_EQUAL(ev.rpc_calls_completed, 100);
-    BOOST_CHECK_EQUAL(ev.rpc_latency_p50_us, 2000);
-    BOOST_CHECK_EQUAL(ev.rpc_latency_p95_us, 10000);
-    BOOST_CHECK_EQUAL(ev.rpc_latency_p99_us, 50000);
-    BOOST_CHECK(ev.interference_correlation > 0.5);
+    RpcCallLifecycleEvent lifecycle_ev{
+        .request_id = request_id,
+        .method = "getblockchaininfo",
+        .peer_addr = "127.0.0.1:8332",
+        .exec_start_us = 1001100,
+        .exec_end_us = 1002000,
+        .success = true,
+        .http_status = 200,
+        .response_size = 1024
+    };
     
-    // Calculate average RPC latency
-    int64_t avg_latency = ev.rpc_total_latency_us / ev.rpc_calls_completed;
-    BOOST_CHECK_EQUAL(avg_latency, 5000); // 5ms average
+    // All events should have same request_id
+    BOOST_CHECK_EQUAL(enqueue_ev.request_id, dispatch_ev.request_id);
+    BOOST_CHECK_EQUAL(dispatch_ev.request_id, lifecycle_ev.request_id);
+    
+    // Timestamps should be monotonic: enqueue <= dispatch <= exec_start <= exec_end
+    BOOST_CHECK(enqueue_ev.received_us <= dispatch_ev.dispatched_us);
+    BOOST_CHECK(dispatch_ev.dispatched_us <= lifecycle_ev.exec_start_us);
+    BOOST_CHECK(lifecycle_ev.exec_start_us <= lifecycle_ev.exec_end_us);
 }
 
 BOOST_AUTO_TEST_CASE(noop_hooks_phase5_safe_to_call)
@@ -655,46 +564,21 @@ BOOST_AUTO_TEST_CASE(noop_hooks_phase5_safe_to_call)
     RpcHttpEnqueueEvent enqueue_ev{
         .request_id = 1, .uri = "/", .peer_addr = "127.0.0.1",
         .received_us = 0, .queue_depth = 0, .max_queue_depth = 64,
-        .admitted = true, .reject_reason = RpcBackpressureReason::None
+        .admitted = true
     };
     hooks.OnRpcHttpEnqueue(enqueue_ev);
     
     RpcHttpDispatchEvent dispatch_ev{
-        .request_id = 1, .enqueued_us = 0, .dispatched_us = 100,
-        .worker_id = 0, .active_workers = 1, .total_workers = 16
+        .request_id = 1, .enqueued_us = 0, .dispatched_us = 100
     };
     hooks.OnRpcHttpDispatch(dispatch_ev);
     
     RpcCallLifecycleEvent lifecycle_ev{
         .request_id = 1, .method = "test", .peer_addr = "127.0.0.1",
-        .priority = RpcMethodPriority::Medium,
-        .http_received_us = 0, .queue_entered_us = 0, .dispatch_us = 0,
-        .parse_start_us = 0, .exec_start_us = 0, .exec_end_us = 100,
-        .response_sent_us = 100, .success = true, .http_status = 200,
-        .response_size = 100
+        .exec_start_us = 0, .exec_end_us = 100,
+        .success = true, .http_status = 200, .response_size = 100
     };
     hooks.OnRpcCallLifecycle(lifecycle_ev);
-    
-    RpcBackpressureEvent bp_ev{
-        .request_id = 1, .method = "test", .timestamp_us = 0,
-        .decision = RpcBackpressureDecision::Admit,
-        .reason = RpcBackpressureReason::None,
-        .queue_depth = 0, .active_rpc_calls = 0,
-        .p2p_load_score = 0.0, .method_calls_last_sec = 0
-    };
-    hooks.OnRpcBackpressure(bp_ev);
-    
-    P2PRpcInterferenceSnapshotEvent snapshot_ev{
-        .timestamp_us = 0, .snapshot_interval_us = 1000000,
-        .p2p_messages_processed = 0, .p2p_processing_us = 0,
-        .p2p_queue_depth = 0, .connected_peers = 0,
-        .rpc_calls_completed = 0, .rpc_total_latency_us = 0,
-        .rpc_queue_depth = 0, .active_rpc_calls = 0,
-        .rpc_latency_p50_us = 0, .rpc_latency_p95_us = 0, .rpc_latency_p99_us = 0,
-        .p2p_load_score = 0.0, .rpc_degradation_score = 0.0,
-        .interference_correlation = 0.0
-    };
-    hooks.OnP2PRpcInterferenceSnapshot(snapshot_ev);
     
     // If we get here without crash/exception, test passes
     BOOST_CHECK(true);

@@ -197,10 +197,18 @@ Stable event schema for baseline comparisons. All timestamps are monotonic micro
 | `end_us` | int64 | Monotonic timestamp at call end |
 | `success` | bool | Whether call succeeded |
 
-## Phase 5: P2P/RPC Degradation Events (#18678)
+## Phase 5: P2P/RPC Degradation Events (#18678) - Simplified
 
-Phase 5 adds comprehensive RPC/HTTP layer monitoring to diagnose and address
-P2P/RPC interference patterns on resource-constrained systems.
+Phase 5 adds minimal RPC/HTTP layer monitoring to diagnose P2P/RPC interference
+patterns. Following Codex review, the implementation was simplified to 3 core events
+with unified request_id correlation.
+
+### Design Principles (per Codex review)
+
+1. **Single request_id** - Generated at HTTP enqueue, propagated through dispatch and RPC lifecycle
+2. **Minimal events** - Only 3 events needed for end-to-end tracing
+3. **No runtime aggregation** - Metrics computed externally by harness
+4. **No placeholder timestamps** - Only actual measured times included
 
 ### New Event Types
 
@@ -209,93 +217,54 @@ Fired when an HTTP request is received and queued (or rejected).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `request_id` | int64 | Unique request identifier |
+| `request_id` | int64 | Unique request identifier (propagated to all events) |
 | `uri` | string | Request URI (e.g., "/", "/wallet/") |
 | `peer_addr` | string | Client address |
 | `received_us` | int64 | When request was received |
 | `queue_depth` | int | Queue depth at admission time |
 | `max_queue_depth` | int | Maximum queue capacity |
-| `admitted` | bool | Whether request was admitted |
-| `reject_reason` | enum | Reason if rejected (None, QueueFull, P2PLoad, etc.) |
+| `admitted` | bool | Whether request was admitted (false = rejected) |
 
 #### RpcHttpDispatchEvent
 Fired when an HTTP request is dispatched to a worker thread.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `request_id` | int64 | Unique request identifier |
+| `request_id` | int64 | Same request_id from enqueue event |
 | `enqueued_us` | int64 | When request was enqueued |
-| `dispatched_us` | int64 | When request was dispatched |
-| `worker_id` | int | Worker thread ID (0-based) |
-| `active_workers` | int | Number of active workers |
-| `total_workers` | int | Total worker pool size |
+| `dispatched_us` | int64 | When request was dispatched to worker |
 
 #### RpcCallLifecycleEvent
-Comprehensive event capturing the entire RPC call lifecycle.
+Fired after RPC call completes. Captures execution timing and result.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `request_id` | int64 | Unique request identifier |
+| `request_id` | int64 | Same request_id from enqueue/dispatch events |
 | `method` | string | RPC method name |
 | `peer_addr` | string | Client address |
-| `priority` | enum | Method priority (High/Medium/Low) |
-| `http_received_us` | int64 | HTTP request received |
-| `queue_entered_us` | int64 | Entered work queue |
-| `dispatch_us` | int64 | Dispatched to worker |
-| `parse_start_us` | int64 | JSON parsing started |
 | `exec_start_us` | int64 | RPC execution started |
 | `exec_end_us` | int64 | RPC execution completed |
-| `response_sent_us` | int64 | HTTP response sent |
 | `success` | bool | Whether call succeeded |
 | `http_status` | int | HTTP status code |
 | `response_size` | size_t | Response size in bytes |
 
-#### RpcBackpressureEvent
-Fired when a QoS/backpressure decision is made.
+### Request ID Correlation
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `request_id` | int64 | Unique request identifier |
-| `method` | string | RPC method (if known) |
-| `timestamp_us` | int64 | When decision was made |
-| `decision` | enum | Action taken (Admit/Reject/Throttle/Prioritize) |
-| `reason` | enum | Why this decision |
-| `queue_depth` | int | Current queue depth |
-| `active_rpc_calls` | int | Active RPC calls |
-| `p2p_load_score` | double | P2P subsystem load (0.0-1.0) |
-| `method_calls_last_sec` | int64 | Calls to this method in last second |
+The `request_id` is generated once in `http_request_cb()` and stored in `HTTPRequest`:
 
-#### P2PRpcInterferenceSnapshotEvent
-Periodic snapshot for correlation analysis.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `timestamp_us` | int64 | Snapshot timestamp |
-| `snapshot_interval_us` | int64 | Time since last snapshot |
-| `p2p_messages_processed` | int | Messages processed in interval |
-| `p2p_processing_us` | int64 | Total P2P processing time |
-| `p2p_queue_depth` | int | Current P2P message queue depth |
-| `connected_peers` | int | Number of connected peers |
-| `rpc_calls_completed` | int | RPC calls completed in interval |
-| `rpc_total_latency_us` | int64 | Total RPC latency in interval |
-| `rpc_queue_depth` | int | Current RPC queue depth |
-| `active_rpc_calls` | int | Currently executing RPC calls |
-| `rpc_latency_p50_us` | int64 | 50th percentile latency |
-| `rpc_latency_p95_us` | int64 | 95th percentile latency |
-| `rpc_latency_p99_us` | int64 | 99th percentile latency |
-| `p2p_load_score` | double | P2P load (0.0-1.0) |
-| `rpc_degradation_score` | double | RPC degradation vs baseline |
-| `interference_correlation` | double | Correlation coefficient |
-
-### RPC Method Priority Classification
-
-Methods are classified for QoS decisions:
-
-| Priority | Methods | Rationale |
-|----------|---------|-----------|
-| High | stop, getblockchaininfo, getnetworkinfo, ping, help | Critical control/status |
-| Medium | sendtoaddress, getnewaddress, etc. | Normal operations |
-| Low | scantxoutset, rescanblockchain, importwallet, getblock | Heavy/long-running |
+```
+HTTP Request → http_request_cb() → GenerateRequestId() → HTTPRequest.m_stdio_bus_request_id
+                    ↓
+              OnRpcHttpEnqueue(request_id)
+                    ↓
+              [queue wait]
+                    ↓
+              OnRpcHttpDispatch(request_id)
+                    ↓
+              HTTPReq_JSONRPC() → req->GetStdioBusRequestId()
+                    ↓
+              OnRpcCallLifecycle(request_id)
+```
 
 ### Hook Points
 
@@ -304,7 +273,6 @@ Methods are classified for QoS decisions:
 | `httpserver.cpp` | `http_request_cb()` | OnRpcHttpEnqueue |
 | `httpserver.cpp` | worker lambda | OnRpcHttpDispatch |
 | `httprpc.cpp` | `HTTPReq_JSONRPC()` | OnRpcCallLifecycle |
-| `httpserver.cpp` | queue full check | OnRpcBackpressure |
 
 ### Phase 5 Latency Requirements
 
@@ -313,24 +281,26 @@ Methods are classified for QoS decisions:
 | `OnRpcHttpEnqueue` | ≤50μs | Called on every HTTP request |
 | `OnRpcHttpDispatch` | ≤50μs | Called when dispatching to worker |
 | `OnRpcCallLifecycle` | ≤100μs | Called after RPC completion |
-| `OnRpcBackpressure` | ≤50μs | Called on QoS decisions |
-| `OnP2PRpcInterferenceSnapshot` | ≤500μs | Called periodically (1/sec) |
 
-### Files Added/Modified
+### Files Modified
 
-**New files:**
-- `src/node/stdio_bus_rpc_metrics.h` - RPC metrics collector
-- `src/node/stdio_bus_rpc_metrics.cpp` - Implementation
+- `src/node/stdio_bus_hooks.h` - Added 3 simplified event types
+- `src/node/stdio_bus_sdk_hooks.h` - Added 3 methods to SDK interface
+- `src/node/stdio_bus_sdk_hooks.cpp` - Added serialization for 3 events
+- `src/httpserver.h` - Added m_stdio_bus_request_id to HTTPRequest
+- `src/httpserver.cpp` - Added hooks with request_id propagation
+- `src/httprpc.cpp` - Added lifecycle hook using request_id from HTTPRequest
+- `src/test/stdio_bus_hooks_tests.cpp` - Added tests including request_id correlation
 
-**Modified files:**
-- `src/node/stdio_bus_hooks.h` - Added Phase 5 event types and methods
-- `src/node/stdio_bus_sdk_hooks.h` - Added Phase 5 methods to SDK
-- `src/node/stdio_bus_sdk_hooks.cpp` - Added Phase 5 serialization
-- `src/httpserver.h` - Added SetHttpServerStdioBusHooks()
-- `src/httpserver.cpp` - Added hooks in http_request_cb()
-- `src/httprpc.h` - Added SetHttpRpcStdioBusHooks()
-- `src/httprpc.cpp` - Added hooks in HTTPReq_JSONRPC()
-- `src/test/stdio_bus_hooks_tests.cpp` - Added Phase 5 tests
+### Removed from MVP (per Codex review)
+
+The following were removed to minimize review surface:
+
+- `RpcBackpressureEvent` - Merged into EnqueueEvent (admitted=false)
+- `P2PRpcInterferenceSnapshotEvent` - Compute offline via harness
+- `stdio_bus_rpc_metrics.h/.cpp` - Aggregation moved to external harness
+- `RpcMethodPriority` enum - Not needed for basic tracing
+- Placeholder timestamp fields - Only actual measured times
 
 ## Consensus Safety Invariants
 
