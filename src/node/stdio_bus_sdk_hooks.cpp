@@ -233,6 +233,85 @@ void StdioBusSdkHooks::OnRpcCall(const RpcCallEvent& ev)
 }
 
 // ============================================================================
+// Phase 3: Message Handler Saturation Events (#27623)
+// ============================================================================
+
+void StdioBusSdkHooks::OnMsgProcPoll(const MsgProcPollEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMsgProcStage(const MsgProcStageEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMsgProcBackpressure(const MsgProcBackpressureEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMsgProcDrop(const MsgProcDropEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMsgProcLoop(const MsgProcLoopEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ============================================================================
 // Queue Operations
 // ============================================================================
 
@@ -380,6 +459,63 @@ std::string StdioBusSdkHooks::SerializeEvent(const Event& ev) const
                << "\"start_us\":" << arg.start_us << ","
                << "\"end_us\":" << arg.end_us << ","
                << "\"success\":" << (arg.success ? "true" : "false");
+        }
+        // Phase 3: Message Handler Saturation Events
+        else if constexpr (std::is_same_v<T, MsgProcPollEvent>) {
+            ss << "\"type\":\"msg_proc_poll\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"msg_type\":\"" << arg.msg_type << "\","
+               << "\"msg_size_bytes\":" << arg.msg_size_bytes << ","
+               << "\"poll_more_work\":" << (arg.poll_more_work ? "true" : "false") << ","
+               << "\"recv_queue_msgs\":" << arg.recv_queue_msgs << ","
+               << "\"recv_queue_bytes\":" << arg.recv_queue_bytes << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, MsgProcStageEvent>) {
+            ss << "\"type\":\"msg_proc_stage\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"msg_type\":\"" << arg.msg_type << "\","
+               << "\"stage\":" << static_cast<int>(arg.stage) << ","
+               << "\"start_us\":" << arg.start_us << ","
+               << "\"end_us\":" << arg.end_us << ","
+               << "\"success\":" << (arg.success ? "true" : "false");
+        }
+        else if constexpr (std::is_same_v<T, MsgProcBackpressureEvent>) {
+            ss << "\"type\":\"msg_proc_backpressure\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"msg_type\":\"" << arg.msg_type << "\","
+               << "\"priority\":" << static_cast<int>(arg.priority) << ","
+               << "\"decision\":" << static_cast<int>(arg.decision) << ","
+               << "\"reason\":\"" << arg.reason << "\","
+               << "\"timestamp_us\":" << arg.timestamp_us << ","
+               << "\"recv_queue_msgs\":" << arg.recv_queue_msgs << ","
+               << "\"recv_queue_bytes\":" << arg.recv_queue_bytes << ","
+               << "\"global_inflight_blocks\":" << arg.global_inflight_blocks << ","
+               << "\"loop_budget_parse_us_left\":" << arg.loop_budget_parse_us_left << ","
+               << "\"loop_budget_heavy_msgs_left\":" << arg.loop_budget_heavy_msgs_left << ","
+               << "\"peer_heavy_msgs_processed\":" << arg.peer_heavy_msgs_processed << ","
+               << "\"max_peer_heavy_msgs_per_loop\":" << arg.max_peer_heavy_msgs_per_loop;
+        }
+        else if constexpr (std::is_same_v<T, MsgProcDropEvent>) {
+            ss << "\"type\":\"msg_proc_drop\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"msg_type\":\"" << arg.msg_type << "\","
+               << "\"reason\":\"" << arg.reason << "\","
+               << "\"dropped_count\":" << arg.dropped_count << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, MsgProcLoopEvent>) {
+            ss << "\"type\":\"msg_proc_loop\","
+               << "\"iteration\":" << arg.iteration << ","
+               << "\"start_us\":" << arg.start_us << ","
+               << "\"end_us\":" << arg.end_us << ","
+               << "\"peers_scanned\":" << arg.peers_scanned << ","
+               << "\"msgs_processed\":" << arg.msgs_processed << ","
+               << "\"msgs_deferred\":" << arg.msgs_deferred << ","
+               << "\"msgs_dropped\":" << arg.msgs_dropped << ","
+               << "\"had_work\":" << (arg.had_work ? "true" : "false") << ","
+               << "\"parse_us_consumed\":" << arg.parse_us_consumed << ","
+               << "\"heavy_msgs_consumed\":" << arg.heavy_msgs_consumed;
         }
     }, ev);
     

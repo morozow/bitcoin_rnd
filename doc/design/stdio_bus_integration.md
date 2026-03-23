@@ -197,6 +197,115 @@ Stable event schema for baseline comparisons. All timestamps are monotonic micro
 | `end_us` | int64 | Monotonic timestamp at call end |
 | `success` | bool | Whether call succeeded |
 
+## Phase 3: Message Handler Saturation Events (#27623)
+
+Phase 3 adds detailed instrumentation for diagnosing message handler saturation and implements
+backpressure-aware admission control.
+
+### New Event Types
+
+#### MsgProcPollEvent
+Emitted when a message is polled from a peer's receive queue.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `peer_id` | int64 | Node ID of the peer |
+| `msg_type` | string | P2P message type |
+| `msg_size_bytes` | size_t | Message size in bytes |
+| `poll_more_work` | bool | More messages available in queue |
+| `recv_queue_msgs` | size_t | Messages remaining in queue |
+| `recv_queue_bytes` | size_t | Bytes remaining in queue |
+| `timestamp_us` | int64 | Monotonic timestamp |
+
+#### MsgProcStageEvent
+Emitted for each processing stage of a message.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `peer_id` | int64 | Node ID of the peer |
+| `msg_type` | string | P2P message type |
+| `stage` | enum | Processing stage: Precheck(0), Parse(1), Process(2) |
+| `start_us` | int64 | Stage start timestamp |
+| `end_us` | int64 | Stage end timestamp |
+| `success` | bool | Whether stage completed successfully |
+
+#### MsgProcBackpressureEvent
+Emitted when a backpressure decision is made.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `peer_id` | int64 | Node ID of the peer |
+| `msg_type` | string | P2P message type |
+| `priority` | enum | Message priority: High(0), Medium(1), Low(2) |
+| `decision` | enum | Decision: Admit(0), Defer(1), DropLowPri(2) |
+| `reason` | string | Decision reason |
+| `timestamp_us` | int64 | Monotonic timestamp |
+| `recv_queue_msgs` | size_t | Queue depth (messages) |
+| `recv_queue_bytes` | size_t | Queue depth (bytes) |
+| `global_inflight_blocks` | size_t | Blocks in-flight globally |
+| `loop_budget_parse_us_left` | int64 | Remaining parse time budget |
+| `loop_budget_heavy_msgs_left` | int32 | Remaining heavy message budget |
+| `peer_heavy_msgs_processed` | int32 | Heavy messages from this peer |
+| `max_peer_heavy_msgs_per_loop` | int32 | Fairness cap per peer |
+
+#### MsgProcDropEvent
+Emitted when a low-priority message is dropped under pressure.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `peer_id` | int64 | Node ID of the peer |
+| `msg_type` | string | P2P message type |
+| `reason` | string | Drop reason |
+| `dropped_count` | size_t | Cumulative drops this loop |
+| `timestamp_us` | int64 | Monotonic timestamp |
+
+#### MsgProcLoopEvent
+Emitted at the end of each message handler loop iteration with extended metrics.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `iteration` | int64 | Loop iteration counter |
+| `start_us` | int64 | Loop start timestamp |
+| `end_us` | int64 | Loop end timestamp |
+| `peers_scanned` | int32 | Number of peers processed |
+| `msgs_processed` | int32 | Messages processed this loop |
+| `msgs_deferred` | int32 | Messages deferred (backpressure) |
+| `msgs_dropped` | int32 | Messages dropped (low-priority) |
+| `had_work` | bool | Whether there was work to do |
+| `parse_us_consumed` | int64 | Parse time consumed |
+| `heavy_msgs_consumed` | int32 | Heavy messages processed |
+
+### Message Priority Classification
+
+Messages are classified into three priority levels for backpressure scheduling:
+
+| Priority | Message Types | Behavior |
+|----------|---------------|----------|
+| **High** | BLOCK, CMPCTBLOCK, BLOCKTXN, HEADERS, TX, GETDATA, GETBLOCKS, GETHEADERS | Never drop, may defer |
+| **Medium** | VERSION, VERACK, SENDHEADERS, SENDCMPCT, PING, PONG, FEEFILTER, WTXIDRELAY, SENDADDRV2 | May defer under pressure |
+| **Low** | ADDR, ADDRV2, INV, GETADDR, NOTFOUND, MEMPOOL | May drop under heavy pressure |
+
+### Backpressure Configuration
+
+New command-line options (all require `-stdiobusbackpressure=1`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-stdiobusbackpressure` | 0 | Enable backpressure (0=off, 1=on) |
+| `-stdiobusbackpressureheavy` | 8 | Max heavy messages per loop |
+| `-stdiobusbackpressureparse` | 2000 | Parse time budget per loop (μs) |
+| `-stdiobusbackpressurepeer` | 2 | Max heavy messages per peer per loop |
+| `-stdiobusbackpressurequeuemsgs` | 256 | Queue high watermark (messages) |
+| `-stdiobusbackpressurequeuebytes` | 8388608 | Queue high watermark (bytes) |
+
+### Backpressure Invariants
+
+1. **Never drop HIGH priority** - Consensus-critical messages are never dropped
+2. **Prefer DEFER over DROP** - Deferred messages stay queued for next iteration
+3. **DROP only LOW priority** - Only gossip/deferrable messages may be dropped
+4. **Fairness cap per peer** - No single peer monopolizes heavy parsing
+5. **No consensus changes** - Only scheduling/admission, not validation results
+
 ## Consensus Safety Invariants
 
 1. **No consensus decisions through stdio_bus** - All validation logic unchanged

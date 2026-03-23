@@ -1056,6 +1056,22 @@ public:
      */
     virtual bool SendMessages(CNode& node) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) = 0;
 
+    /**
+     * Called at the beginning of each message handler loop iteration.
+     * Used for budget reset and metrics initialization.
+     *
+     * @param[in]   num_peers       Number of peers to be processed this iteration
+     */
+    virtual void OnMsgProcLoopBegin(size_t num_peers) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) {}
+
+    /**
+     * Called at the end of each message handler loop iteration.
+     * Used for emitting loop-level metrics.
+     *
+     * @param[in]   had_work        Whether any work was done this iteration
+     */
+    virtual void OnMsgProcLoopEnd(bool had_work) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) {}
+
 
 protected:
     /**

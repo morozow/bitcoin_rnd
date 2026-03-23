@@ -72,6 +72,13 @@ public:
     void OnTxAdmission(const TxAdmissionEvent& ev) override;
     void OnMsgHandlerLoop(const MsgHandlerLoopEvent& ev) override;
     void OnRpcCall(const RpcCallEvent& ev) override;
+    
+    // Phase 3: Message Handler Saturation Events
+    void OnMsgProcPoll(const MsgProcPollEvent& ev) override;
+    void OnMsgProcStage(const MsgProcStageEvent& ev) override;
+    void OnMsgProcBackpressure(const MsgProcBackpressureEvent& ev) override;
+    void OnMsgProcDrop(const MsgProcDropEvent& ev) override;
+    void OnMsgProcLoop(const MsgProcLoopEvent& ev) override;
 
     // ========== Lifecycle ==========
 
@@ -101,7 +108,13 @@ private:
         BlockValidatedEvent,
         TxAdmissionEvent,
         MsgHandlerLoopEvent,
-        RpcCallEvent
+        RpcCallEvent,
+        // Phase 3: Message Handler Saturation Events
+        MsgProcPollEvent,
+        MsgProcStageEvent,
+        MsgProcBackpressureEvent,
+        MsgProcDropEvent,
+        MsgProcLoopEvent
     >;
 
     /** Try to enqueue an event (non-blocking) */

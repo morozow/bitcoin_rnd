@@ -3138,6 +3138,9 @@ void CConnman::ThreadMessageHandler()
             // consecutive connections in the m_nodes list.
             const NodesSnapshot snap{*this, /*shuffle=*/true};
 
+            // Notify start of loop iteration (for budget reset and metrics)
+            m_msgproc->OnMsgProcLoopBegin(snap.Nodes().size());
+
             for (CNode* pnode : snap.Nodes()) {
                 if (pnode->fDisconnect)
                     continue;
@@ -3153,6 +3156,9 @@ void CConnman::ThreadMessageHandler()
                 if (flagInterruptMsgProc)
                     return;
             }
+
+            // Notify end of loop iteration (for metrics emission)
+            m_msgproc->OnMsgProcLoopEnd(fMoreWork);
         }
 
         WAIT_LOCK(mutexMsgProc, lock);

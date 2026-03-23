@@ -98,6 +98,18 @@ public:
         node::StdioBusMode stdio_bus_mode{node::StdioBusMode::Off};
         //! stdio_bus hooks for observability (always valid, NoOp by default)
         std::shared_ptr<node::StdioBusHooks> stdio_bus_hooks{std::make_shared<node::NoOpStdioBusHooks>()};
+        //! Enable backpressure for message processing (Phase 3, default: false)
+        bool backpressure_enable{false};
+        //! Backpressure: max heavy messages per loop iteration
+        int32_t backpressure_max_heavy_msgs_per_loop{8};
+        //! Backpressure: max parse time budget per loop (microseconds)
+        int64_t backpressure_parse_us_budget{2000};
+        //! Backpressure: max heavy messages per peer per loop (fairness)
+        int32_t backpressure_max_peer_heavy_per_loop{2};
+        //! Backpressure: queue high watermark (messages)
+        size_t backpressure_queue_hi_watermark_msgs{256};
+        //! Backpressure: queue high watermark (bytes)
+        size_t backpressure_queue_hi_watermark_bytes{8 * 1024 * 1024};
     };
 
     static std::unique_ptr<PeerManager> make(CConnman& connman, AddrMan& addrman,

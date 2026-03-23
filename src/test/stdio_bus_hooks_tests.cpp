@@ -145,6 +145,32 @@ public:
         m_rpc_calls.push_back(ev);
     }
     
+    // Phase 3: Message Handler Saturation hooks
+    void OnMsgProcPoll(const MsgProcPollEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_poll_events.push_back(ev);
+    }
+    
+    void OnMsgProcStage(const MsgProcStageEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stage_events.push_back(ev);
+    }
+    
+    void OnMsgProcBackpressure(const MsgProcBackpressureEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_backpressure_events.push_back(ev);
+    }
+    
+    void OnMsgProcDrop(const MsgProcDropEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_drop_events.push_back(ev);
+    }
+    
+    void OnMsgProcLoop(const MsgProcLoopEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_proc_loop_events.push_back(ev);
+    }
+    
     // Accessors
     size_t MessageCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_messages.size(); }
     size_t HeadersCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_headers.size(); }
@@ -167,6 +193,12 @@ private:
     std::vector<TxAdmissionEvent> m_tx_admissions;
     std::vector<MsgHandlerLoopEvent> m_loop_events;
     std::vector<RpcCallEvent> m_rpc_calls;
+    // Phase 3 events
+    std::vector<MsgProcPollEvent> m_poll_events;
+    std::vector<MsgProcStageEvent> m_stage_events;
+    std::vector<MsgProcBackpressureEvent> m_backpressure_events;
+    std::vector<MsgProcDropEvent> m_drop_events;
+    std::vector<MsgProcLoopEvent> m_proc_loop_events;
 };
 
 BOOST_AUTO_TEST_CASE(recording_hooks_capture_events)
@@ -393,6 +425,337 @@ BOOST_AUTO_TEST_CASE(latency_measurement)
     BOOST_CHECK(latency_us >= 1000);
     // Should be less than 100ms (sanity check)
     BOOST_CHECK(latency_us < 100000);
+}
+
+// ============================================================================
+// Phase 3: Message Handler Saturation Tests (#27623)
+// ============================================================================
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Include backpressure header for Phase 3 tests
+#include <node/msgproc_backpressure.h>
+#include <protocol.h>
+
+BOOST_AUTO_TEST_SUITE(stdio_bus_phase3_tests)
+
+// ============================================================================
+// Test: ClassifyMsgPriority - table-driven tests
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(classify_msg_priority_high)
+{
+    // Consensus-critical messages should be HIGH priority
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::BLOCK, 1000000) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::CMPCTBLOCK, 50000) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::BLOCKTXN, 100000) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::HEADERS, 162000) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::TX, 500) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::GETDATA, 100) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::GETBLOCKS, 100) == MsgPriority::High);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::GETHEADERS, 100) == MsgPriority::High);
+}
+
+BOOST_AUTO_TEST_CASE(classify_msg_priority_medium)
+{
+    // Control-plane messages should be MEDIUM priority
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::VERSION, 100) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::VERACK, 0) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::SENDHEADERS, 0) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::SENDCMPCT, 10) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::PING, 8) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::PONG, 8) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::FEEFILTER, 8) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::WTXIDRELAY, 0) == MsgPriority::Medium);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::SENDADDRV2, 0) == MsgPriority::Medium);
+}
+
+BOOST_AUTO_TEST_CASE(classify_msg_priority_low)
+{
+    // Gossip/deferrable messages should be LOW priority
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::ADDR, 1000) == MsgPriority::Low);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::ADDRV2, 1000) == MsgPriority::Low);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::INV, 500) == MsgPriority::Low);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::GETADDR, 0) == MsgPriority::Low);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::NOTFOUND, 100) == MsgPriority::Low);
+    BOOST_CHECK(ClassifyMsgPriority(NetMsgType::MEMPOOL, 0) == MsgPriority::Low);
+}
+
+BOOST_AUTO_TEST_CASE(classify_msg_priority_unknown)
+{
+    // Unknown small messages -> LOW
+    BOOST_CHECK(ClassifyMsgPriority("unknown", 1000) == MsgPriority::Low);
+    // Unknown large messages -> MEDIUM
+    BOOST_CHECK(ClassifyMsgPriority("unknown", 100000) == MsgPriority::Medium);
+}
+
+// ============================================================================
+// Test: IsHeavyMsgType
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(is_heavy_msg_type)
+{
+    // Block-related messages are heavy
+    BOOST_CHECK(IsHeavyMsgType(NetMsgType::BLOCK, 1000000));
+    BOOST_CHECK(IsHeavyMsgType(NetMsgType::CMPCTBLOCK, 50000));
+    BOOST_CHECK(IsHeavyMsgType(NetMsgType::BLOCKTXN, 100000));
+    
+    // Large headers batches are heavy
+    BOOST_CHECK(IsHeavyMsgType(NetMsgType::HEADERS, 200000)); // > 128KB
+    BOOST_CHECK(!IsHeavyMsgType(NetMsgType::HEADERS, 50000)); // < 128KB
+    
+    // Other messages are not heavy
+    BOOST_CHECK(!IsHeavyMsgType(NetMsgType::TX, 500));
+    BOOST_CHECK(!IsHeavyMsgType(NetMsgType::INV, 1000));
+    BOOST_CHECK(!IsHeavyMsgType(NetMsgType::ADDR, 1000));
+}
+
+// ============================================================================
+// Test: MsgProcLoopBudget
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(loop_budget_reset)
+{
+    MsgProcLoopBudget budget;
+    
+    // Consume some budget
+    budget.ConsumeHeavyMsg(500);
+    budget.ConsumeHeavyMsg(300);
+    budget.msgs_deferred = 2;
+    budget.msgs_dropped = 1;
+    
+    BOOST_CHECK_EQUAL(budget.parse_us_consumed, 800);
+    BOOST_CHECK_EQUAL(budget.heavy_msgs_consumed, 2);
+    BOOST_CHECK_EQUAL(budget.parse_us_left, 2000 - 800);
+    BOOST_CHECK_EQUAL(budget.heavy_msgs_left, 8 - 2);
+    
+    // Reset
+    budget.Reset();
+    
+    BOOST_CHECK_EQUAL(budget.parse_us_consumed, 0);
+    BOOST_CHECK_EQUAL(budget.heavy_msgs_consumed, 0);
+    BOOST_CHECK_EQUAL(budget.parse_us_left, 2000);
+    BOOST_CHECK_EQUAL(budget.heavy_msgs_left, 8);
+    BOOST_CHECK_EQUAL(budget.msgs_deferred, 0);
+    BOOST_CHECK_EQUAL(budget.msgs_dropped, 0);
+}
+
+BOOST_AUTO_TEST_CASE(loop_budget_no_negative)
+{
+    MsgProcLoopBudget budget;
+    budget.parse_us_left = 100;
+    budget.heavy_msgs_left = 1;
+    
+    // Consume more than available
+    budget.ConsumeHeavyMsg(500);
+    
+    // Should not go negative
+    BOOST_CHECK(budget.parse_us_left >= 0);
+    BOOST_CHECK(budget.heavy_msgs_left >= 0);
+}
+
+// ============================================================================
+// Test: ShouldDeferMessage - decision matrix
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(should_defer_disabled)
+{
+    MsgProcLoopBudget budget;
+    MsgProcPeerLoopState peer_state;
+    
+    // When backpressure is disabled, always admit
+    auto result = ShouldDeferMessage(NetMsgType::ADDR, 1000, 1000, 10000000, budget, peer_state, false);
+    BOOST_CHECK(!result.defer);
+    BOOST_CHECK(!result.drop);
+}
+
+BOOST_AUTO_TEST_CASE(should_defer_high_priority_never_dropped)
+{
+    MsgProcLoopBudget budget;
+    budget.heavy_msgs_left = 0;  // Budget exhausted
+    budget.parse_us_left = 0;
+    MsgProcPeerLoopState peer_state;
+    
+    // HIGH priority messages should never be dropped, only deferred
+    auto result = ShouldDeferMessage(NetMsgType::BLOCK, 1000000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(result.defer);
+    BOOST_CHECK(!result.drop);
+    
+    result = ShouldDeferMessage(NetMsgType::HEADERS, 162000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(result.defer);
+    BOOST_CHECK(!result.drop);
+    
+    result = ShouldDeferMessage(NetMsgType::TX, 500, 0, 0, budget, peer_state, true);
+    // TX is not heavy, so no defer for budget exhaustion
+    BOOST_CHECK(!result.defer);
+    BOOST_CHECK(!result.drop);
+}
+
+BOOST_AUTO_TEST_CASE(should_defer_low_priority_dropped_on_queue_pressure)
+{
+    MsgProcLoopBudget budget;
+    budget.queue_high_watermark_msgs = 100;
+    MsgProcPeerLoopState peer_state;
+    
+    // LOW priority messages should be dropped under queue pressure
+    auto result = ShouldDeferMessage(NetMsgType::ADDR, 1000, 200, 0, budget, peer_state, true);
+    BOOST_CHECK(!result.defer);
+    BOOST_CHECK(result.drop);
+    BOOST_CHECK_EQUAL(std::string(result.reason), "queue_high_watermark");
+    
+    result = ShouldDeferMessage(NetMsgType::INV, 500, 200, 0, budget, peer_state, true);
+    BOOST_CHECK(result.drop);
+}
+
+BOOST_AUTO_TEST_CASE(should_defer_peer_fairness_cap)
+{
+    MsgProcLoopBudget budget;
+    budget.max_peer_heavy_per_loop = 2;
+    MsgProcPeerLoopState peer_state;
+    peer_state.heavy_msgs_processed = 2;  // Already at cap
+    
+    // Heavy message from peer at cap should be deferred
+    auto result = ShouldDeferMessage(NetMsgType::BLOCK, 1000000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(result.defer);
+    BOOST_CHECK(!result.drop);
+    BOOST_CHECK_EQUAL(std::string(result.reason), "peer_heavy_cap");
+}
+
+BOOST_AUTO_TEST_CASE(should_defer_budget_exhausted)
+{
+    MsgProcLoopBudget budget;
+    budget.heavy_msgs_left = 0;
+    MsgProcPeerLoopState peer_state;
+    
+    // Heavy HIGH priority -> defer
+    auto result = ShouldDeferMessage(NetMsgType::BLOCK, 1000000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(result.defer);
+    BOOST_CHECK(!result.drop);
+    BOOST_CHECK_EQUAL(std::string(result.reason), "heavy_budget_exhausted");
+    
+    // Heavy LOW priority -> drop
+    // Note: BLOCK is HIGH, so we need a hypothetical heavy LOW message
+    // In practice, there are no heavy LOW messages, but test the logic
+}
+
+BOOST_AUTO_TEST_CASE(should_defer_parse_budget_exhausted)
+{
+    MsgProcLoopBudget budget;
+    budget.parse_us_left = 0;
+    MsgProcPeerLoopState peer_state;
+    
+    // Heavy message with parse budget exhausted -> defer
+    auto result = ShouldDeferMessage(NetMsgType::BLOCK, 1000000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(result.defer);
+    BOOST_CHECK(!result.drop);
+}
+
+BOOST_AUTO_TEST_CASE(should_defer_normal_admit)
+{
+    MsgProcLoopBudget budget;  // Fresh budget
+    MsgProcPeerLoopState peer_state;  // Fresh state
+    
+    // Normal conditions -> admit
+    auto result = ShouldDeferMessage(NetMsgType::BLOCK, 1000000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(!result.defer);
+    BOOST_CHECK(!result.drop);
+    BOOST_CHECK_EQUAL(std::string(result.reason), "admit");
+    
+    result = ShouldDeferMessage(NetMsgType::TX, 500, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(!result.defer);
+    BOOST_CHECK(!result.drop);
+    
+    result = ShouldDeferMessage(NetMsgType::ADDR, 1000, 0, 0, budget, peer_state, true);
+    BOOST_CHECK(!result.defer);
+    BOOST_CHECK(!result.drop);
+}
+
+// ============================================================================
+// Test: Phase 3 NoOp hooks
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(noop_phase3_hooks_safe)
+{
+    NoOpStdioBusHooks hooks;
+    
+    // All Phase 3 hook calls should be safe no-ops
+    MsgProcPollEvent poll_ev{
+        .peer_id = 1,
+        .msg_type = "block",
+        .msg_size_bytes = 1000000,
+        .poll_more_work = true,
+        .recv_queue_msgs = 5,
+        .recv_queue_bytes = 5000000,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    hooks.OnMsgProcPoll(poll_ev);
+    
+    MsgProcStageEvent stage_ev{
+        .peer_id = 1,
+        .msg_type = "block",
+        .stage = MsgProcStage::Process,
+        .start_us = 1000,
+        .end_us = 2000,
+        .success = true
+    };
+    hooks.OnMsgProcStage(stage_ev);
+    
+    MsgProcBackpressureEvent bp_ev{
+        .peer_id = 1,
+        .msg_type = "addr",
+        .priority = MsgPriority::Low,
+        .decision = BackpressureDecision::DropLowPri,
+        .reason = "queue_high_watermark",
+        .timestamp_us = GetMonotonicTimeUs(),
+        .recv_queue_msgs = 300,
+        .recv_queue_bytes = 10000000,
+        .global_inflight_blocks = 5,
+        .loop_budget_parse_us_left = 0,
+        .loop_budget_heavy_msgs_left = 0,
+        .peer_heavy_msgs_processed = 3,
+        .max_peer_heavy_msgs_per_loop = 2
+    };
+    hooks.OnMsgProcBackpressure(bp_ev);
+    
+    MsgProcDropEvent drop_ev{
+        .peer_id = 1,
+        .msg_type = "addr",
+        .reason = "queue_high_watermark",
+        .dropped_count = 5,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    hooks.OnMsgProcDrop(drop_ev);
+    
+    MsgProcLoopEvent loop_ev{
+        .iteration = 100,
+        .start_us = 1000,
+        .end_us = 5000,
+        .peers_scanned = 10,
+        .msgs_processed = 50,
+        .msgs_deferred = 2,
+        .msgs_dropped = 1,
+        .had_work = true,
+        .parse_us_consumed = 1500,
+        .heavy_msgs_consumed = 3
+    };
+    hooks.OnMsgProcLoop(loop_ev);
+    
+    // If we get here without crash/exception, test passes
+    BOOST_CHECK(true);
+}
+
+// ============================================================================
+// Test: MsgProcPeerLoopState
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(peer_loop_state_reset)
+{
+    MsgProcPeerLoopState state;
+    state.heavy_msgs_processed = 5;
+    
+    state.Reset();
+    
+    BOOST_CHECK_EQUAL(state.heavy_msgs_processed, 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
