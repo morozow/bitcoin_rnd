@@ -29,3 +29,6 @@ target/
 /ci/scratch/
 
 sandbox
+
+# Kiro memory (kept outside git for cross-branch persistence)
+kiro_memory/KIRO_BRAIN.md
