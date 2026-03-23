@@ -233,6 +233,85 @@ void StdioBusSdkHooks::OnRpcCall(const RpcCallEvent& ev)
 }
 
 // ============================================================================
+// Phase 5: P2P/RPC Degradation Hook Implementations
+// ============================================================================
+
+void StdioBusSdkHooks::OnRpcHttpEnqueue(const RpcHttpEnqueueEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnRpcHttpDispatch(const RpcHttpDispatchEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnRpcCallLifecycle(const RpcCallLifecycleEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnRpcBackpressure(const RpcBackpressureEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnP2PRpcInterferenceSnapshot(const P2PRpcInterferenceSnapshotEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ============================================================================
 // Queue Operations
 // ============================================================================
 
@@ -380,6 +459,75 @@ std::string StdioBusSdkHooks::SerializeEvent(const Event& ev) const
                << "\"start_us\":" << arg.start_us << ","
                << "\"end_us\":" << arg.end_us << ","
                << "\"success\":" << (arg.success ? "true" : "false");
+        }
+        // Phase 5: P2P/RPC Degradation Events
+        else if constexpr (std::is_same_v<T, RpcHttpEnqueueEvent>) {
+            ss << "\"type\":\"rpc_http_enqueue\","
+               << "\"request_id\":" << arg.request_id << ","
+               << "\"uri\":\"" << arg.uri << "\","
+               << "\"peer_addr\":\"" << arg.peer_addr << "\","
+               << "\"received_us\":" << arg.received_us << ","
+               << "\"queue_depth\":" << arg.queue_depth << ","
+               << "\"max_queue_depth\":" << arg.max_queue_depth << ","
+               << "\"admitted\":" << (arg.admitted ? "true" : "false") << ","
+               << "\"reject_reason\":\"" << RpcBackpressureReasonToString(arg.reject_reason) << "\"";
+        }
+        else if constexpr (std::is_same_v<T, RpcHttpDispatchEvent>) {
+            ss << "\"type\":\"rpc_http_dispatch\","
+               << "\"request_id\":" << arg.request_id << ","
+               << "\"enqueued_us\":" << arg.enqueued_us << ","
+               << "\"dispatched_us\":" << arg.dispatched_us << ","
+               << "\"worker_id\":" << arg.worker_id << ","
+               << "\"active_workers\":" << arg.active_workers << ","
+               << "\"total_workers\":" << arg.total_workers;
+        }
+        else if constexpr (std::is_same_v<T, RpcCallLifecycleEvent>) {
+            ss << "\"type\":\"rpc_call_lifecycle\","
+               << "\"request_id\":" << arg.request_id << ","
+               << "\"method\":\"" << arg.method << "\","
+               << "\"peer_addr\":\"" << arg.peer_addr << "\","
+               << "\"priority\":\"" << RpcMethodPriorityToString(arg.priority) << "\","
+               << "\"http_received_us\":" << arg.http_received_us << ","
+               << "\"queue_entered_us\":" << arg.queue_entered_us << ","
+               << "\"dispatch_us\":" << arg.dispatch_us << ","
+               << "\"parse_start_us\":" << arg.parse_start_us << ","
+               << "\"exec_start_us\":" << arg.exec_start_us << ","
+               << "\"exec_end_us\":" << arg.exec_end_us << ","
+               << "\"response_sent_us\":" << arg.response_sent_us << ","
+               << "\"success\":" << (arg.success ? "true" : "false") << ","
+               << "\"http_status\":" << arg.http_status << ","
+               << "\"response_size\":" << arg.response_size;
+        }
+        else if constexpr (std::is_same_v<T, RpcBackpressureEvent>) {
+            ss << "\"type\":\"rpc_backpressure\","
+               << "\"request_id\":" << arg.request_id << ","
+               << "\"method\":\"" << arg.method << "\","
+               << "\"timestamp_us\":" << arg.timestamp_us << ","
+               << "\"decision\":\"" << RpcBackpressureDecisionToString(arg.decision) << "\","
+               << "\"reason\":\"" << RpcBackpressureReasonToString(arg.reason) << "\","
+               << "\"queue_depth\":" << arg.queue_depth << ","
+               << "\"active_rpc_calls\":" << arg.active_rpc_calls << ","
+               << "\"p2p_load_score\":" << arg.p2p_load_score << ","
+               << "\"method_calls_last_sec\":" << arg.method_calls_last_sec;
+        }
+        else if constexpr (std::is_same_v<T, P2PRpcInterferenceSnapshotEvent>) {
+            ss << "\"type\":\"p2p_rpc_interference_snapshot\","
+               << "\"timestamp_us\":" << arg.timestamp_us << ","
+               << "\"snapshot_interval_us\":" << arg.snapshot_interval_us << ","
+               << "\"p2p_messages_processed\":" << arg.p2p_messages_processed << ","
+               << "\"p2p_processing_us\":" << arg.p2p_processing_us << ","
+               << "\"p2p_queue_depth\":" << arg.p2p_queue_depth << ","
+               << "\"connected_peers\":" << arg.connected_peers << ","
+               << "\"rpc_calls_completed\":" << arg.rpc_calls_completed << ","
+               << "\"rpc_total_latency_us\":" << arg.rpc_total_latency_us << ","
+               << "\"rpc_queue_depth\":" << arg.rpc_queue_depth << ","
+               << "\"active_rpc_calls\":" << arg.active_rpc_calls << ","
+               << "\"rpc_latency_p50_us\":" << arg.rpc_latency_p50_us << ","
+               << "\"rpc_latency_p95_us\":" << arg.rpc_latency_p95_us << ","
+               << "\"rpc_latency_p99_us\":" << arg.rpc_latency_p99_us << ","
+               << "\"p2p_load_score\":" << arg.p2p_load_score << ","
+               << "\"rpc_degradation_score\":" << arg.rpc_degradation_score << ","
+               << "\"interference_correlation\":" << arg.interference_correlation;
         }
     }, ev);
     

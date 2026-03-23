@@ -229,6 +229,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/minisketchwrapper.cpp
   node/peerman_args.cpp
   node/stdio_bus_observer.cpp
+  node/stdio_bus_rpc_metrics.cpp
   node/stdio_bus_sdk_hooks.cpp
   node/psbt.cpp
   node/timeoffsets.cpp

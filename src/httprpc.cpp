@@ -9,6 +9,8 @@
 #include <httpserver.h>
 #include <logging.h>
 #include <netaddress.h>
+#include <node/stdio_bus_hooks.h>
+#include <node/stdio_bus_rpc_metrics.h>
 #include <rpc/protocol.h>
 #include <rpc/server.h>
 #include <util/fs.h>
@@ -37,6 +39,18 @@ static std::vector<std::vector<std::string>> g_rpcauth;
 /* RPC Auth Whitelist */
 static std::map<std::string, std::set<std::string>> g_rpc_whitelist;
 static bool g_rpc_whitelist_default = false;
+
+//! stdio_bus hooks for RPC monitoring (Phase 5)
+static std::shared_ptr<node::StdioBusHooks> g_httprpc_stdio_bus_hooks;
+
+/**
+ * @brief Set stdio_bus hooks for HTTP RPC
+ * Called from init.cpp when stdio_bus is enabled.
+ */
+void SetHttpRpcStdioBusHooks(std::shared_ptr<node::StdioBusHooks> hooks)
+{
+    g_httprpc_stdio_bus_hooks = std::move(hooks);
+}
 
 static void JSONErrorReply(HTTPRequest* req, UniValue objError, const JSONRPCRequest& jreq)
 {
@@ -103,6 +117,15 @@ static bool RPCAuthorized(const std::string& strAuth, std::string& strAuthUserna
 
 static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
 {
+    // Phase 5: Capture timing for RPC lifecycle
+    int64_t request_id = node::GenerateRequestId();
+    int64_t http_received_us = node::GetMonotonicTimeUs();
+    std::string peer_addr = req->GetPeer().ToStringAddrPort();
+    std::string rpc_method; // Will be populated after parsing
+    
+    // Track active RPC call
+    node::StdioBusRpcCallTracker rpc_tracker;
+    
     // JSONRPC handles only POST
     if (req->GetRequestMethod() != HTTPRequest::POST) {
         req->WriteReply(HTTP_BAD_METHOD, "JSONRPC server handles only POST requests");
@@ -118,7 +141,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
 
     JSONRPCRequest jreq;
     jreq.context = context;
-    jreq.peerAddr = req->GetPeer().ToStringAddrPort();
+    jreq.peerAddr = peer_addr;
     if (!RPCAuthorized(authHeader.second, jreq.authUser)) {
         LogWarning("ThreadRPCServer incorrect password attempt from %s", jreq.peerAddr);
 
@@ -132,6 +155,8 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
         return false;
     }
 
+    int64_t parse_start_us = node::GetMonotonicTimeUs();
+    
     try {
         // Parse request
         UniValue valRequest;
@@ -151,23 +176,60 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
         // singleton request
         } else if (valRequest.isObject()) {
             jreq.parse(valRequest);
+            rpc_method = jreq.strMethod; // Capture method name
+            
             if (user_has_whitelist && !g_rpc_whitelist[jreq.authUser].contains(jreq.strMethod)) {
                 LogWarning("RPC User %s not allowed to call method %s", jreq.authUser, jreq.strMethod);
                 req->WriteReply(HTTP_FORBIDDEN);
                 return false;
             }
 
+            int64_t exec_start_us = node::GetMonotonicTimeUs();
+            
             // Legacy 1.0/1.1 behavior is for failed requests to throw
             // exceptions which return HTTP errors and RPC errors to the client.
             // 2.0 behavior is to catch exceptions and return HTTP success with
             // RPC errors, as long as there is not an actual HTTP server error.
             const bool catch_errors{jreq.m_json_version == JSONRPCVersion::V2};
             reply = JSONRPCExec(jreq, catch_errors);
+            
+            int64_t exec_end_us = node::GetMonotonicTimeUs();
 
             if (jreq.IsNotification()) {
                 // Even though we do execute notifications, we do not respond to them
                 req->WriteReply(HTTP_NO_CONTENT);
+                
+                // Phase 5: Fire lifecycle event for notification
+                if (g_httprpc_stdio_bus_hooks && g_httprpc_stdio_bus_hooks->Enabled()) {
+                    node::RpcCallLifecycleEvent ev;
+                    ev.request_id = request_id;
+                    ev.method = rpc_method;
+                    ev.peer_addr = peer_addr;
+                    ev.priority = node::ClassifyRpcMethodPriority(rpc_method);
+                    ev.http_received_us = http_received_us;
+                    ev.queue_entered_us = http_received_us; // Approximation
+                    ev.dispatch_us = http_received_us; // Approximation
+                    ev.parse_start_us = parse_start_us;
+                    ev.exec_start_us = exec_start_us;
+                    ev.exec_end_us = exec_end_us;
+                    ev.response_sent_us = node::GetMonotonicTimeUs();
+                    ev.success = true;
+                    ev.http_status = HTTP_NO_CONTENT;
+                    ev.response_size = 0;
+                    g_httprpc_stdio_bus_hooks->OnRpcCallLifecycle(ev);
+                }
+                
+                // Update metrics
+                if (node::g_stdio_bus_rpc_metrics) {
+                    node::g_stdio_bus_rpc_metrics->RecordRpcCall(exec_end_us - exec_start_us, true);
+                }
+                
                 return true;
+            }
+            
+            // Phase 5: Record execution time for singleton request
+            if (node::g_stdio_bus_rpc_metrics) {
+                node::g_stdio_bus_rpc_metrics->RecordRpcCall(exec_end_us - exec_start_us, true);
             }
 
         // array of requests
@@ -190,6 +252,9 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
                 }
             }
 
+            rpc_method = "[batch]"; // Mark as batch request
+            int64_t batch_exec_start_us = node::GetMonotonicTimeUs();
+            
             // Execute each request
             reply = UniValue::VARR;
             for (size_t i{0}; i < valRequest.size(); ++i) {
@@ -208,6 +273,14 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
                     reply.push_back(std::move(response));
                 }
             }
+            
+            int64_t batch_exec_end_us = node::GetMonotonicTimeUs();
+            
+            // Phase 5: Record batch execution time
+            if (node::g_stdio_bus_rpc_metrics) {
+                node::g_stdio_bus_rpc_metrics->RecordRpcCall(batch_exec_end_us - batch_exec_start_us, true);
+            }
+            
             // Return no response for an all-notification batch, but only if the
             // batch request is non-empty. Technically according to the JSON-RPC
             // 2.0 spec, an empty batch request should also return no response,
@@ -225,13 +298,77 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
         else
             throw JSONRPCError(RPC_PARSE_ERROR, "Top-level object parse error");
 
+        std::string reply_str = reply.write() + "\n";
         req->WriteHeader("Content-Type", "application/json");
-        req->WriteReply(HTTP_OK, reply.write() + "\n");
+        req->WriteReply(HTTP_OK, reply_str);
+        
+        // Phase 5: Fire lifecycle event for successful request
+        if (g_httprpc_stdio_bus_hooks && g_httprpc_stdio_bus_hooks->Enabled()) {
+            node::RpcCallLifecycleEvent ev;
+            ev.request_id = request_id;
+            ev.method = rpc_method;
+            ev.peer_addr = peer_addr;
+            ev.priority = node::ClassifyRpcMethodPriority(rpc_method);
+            ev.http_received_us = http_received_us;
+            ev.queue_entered_us = http_received_us; // Approximation
+            ev.dispatch_us = http_received_us; // Approximation
+            ev.parse_start_us = parse_start_us;
+            ev.exec_start_us = parse_start_us; // Approximation
+            ev.exec_end_us = node::GetMonotonicTimeUs();
+            ev.response_sent_us = ev.exec_end_us;
+            ev.success = true;
+            ev.http_status = HTTP_OK;
+            ev.response_size = reply_str.size();
+            g_httprpc_stdio_bus_hooks->OnRpcCallLifecycle(ev);
+        }
+        
     } catch (UniValue& e) {
         JSONErrorReply(req, std::move(e), jreq);
+        
+        // Phase 5: Fire lifecycle event for failed request
+        if (g_httprpc_stdio_bus_hooks && g_httprpc_stdio_bus_hooks->Enabled()) {
+            node::RpcCallLifecycleEvent ev;
+            ev.request_id = request_id;
+            ev.method = rpc_method;
+            ev.peer_addr = peer_addr;
+            ev.priority = node::ClassifyRpcMethodPriority(rpc_method);
+            ev.http_received_us = http_received_us;
+            ev.queue_entered_us = http_received_us;
+            ev.dispatch_us = http_received_us;
+            ev.parse_start_us = parse_start_us;
+            ev.exec_start_us = parse_start_us;
+            ev.exec_end_us = node::GetMonotonicTimeUs();
+            ev.response_sent_us = ev.exec_end_us;
+            ev.success = false;
+            ev.http_status = HTTP_INTERNAL_SERVER_ERROR;
+            ev.response_size = 0;
+            g_httprpc_stdio_bus_hooks->OnRpcCallLifecycle(ev);
+        }
+        
         return false;
     } catch (const std::exception& e) {
         JSONErrorReply(req, JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq);
+        
+        // Phase 5: Fire lifecycle event for exception
+        if (g_httprpc_stdio_bus_hooks && g_httprpc_stdio_bus_hooks->Enabled()) {
+            node::RpcCallLifecycleEvent ev;
+            ev.request_id = request_id;
+            ev.method = rpc_method;
+            ev.peer_addr = peer_addr;
+            ev.priority = node::ClassifyRpcMethodPriority(rpc_method);
+            ev.http_received_us = http_received_us;
+            ev.queue_entered_us = http_received_us;
+            ev.dispatch_us = http_received_us;
+            ev.parse_start_us = parse_start_us;
+            ev.exec_start_us = parse_start_us;
+            ev.exec_end_us = node::GetMonotonicTimeUs();
+            ev.response_sent_us = ev.exec_end_us;
+            ev.success = false;
+            ev.http_status = HTTP_INTERNAL_SERVER_ERROR;
+            ev.response_size = 0;
+            g_httprpc_stdio_bus_hooks->OnRpcCallLifecycle(ev);
+        }
+        
         return false;
     }
     return true;

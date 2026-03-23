@@ -6,9 +6,14 @@
 #define BITCOIN_HTTPSERVER_H
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
+
+namespace node {
+class StdioBusHooks;
+} // namespace node
 
 namespace util {
 class SignalInterrupt;
@@ -45,6 +50,9 @@ void StartHTTPServer();
 void InterruptHTTPServer();
 /** Stop HTTP server */
 void StopHTTPServer();
+
+/** Set stdio_bus hooks for HTTP server (Phase 5: P2P/RPC degradation monitoring) */
+void SetHttpServerStdioBusHooks(std::shared_ptr<node::StdioBusHooks> hooks);
 
 /** Change logging level for libevent. */
 void UpdateHTTPServerLogging(bool enable);

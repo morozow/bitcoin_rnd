@@ -6,6 +6,11 @@
 #define BITCOIN_HTTPRPC_H
 
 #include <any>
+#include <memory>
+
+namespace node {
+class StdioBusHooks;
+} // namespace node
 
 /** Start HTTP RPC subsystem.
  * Precondition; HTTP and RPC has been started.
@@ -18,6 +23,9 @@ void InterruptHTTPRPC();
  * Precondition; HTTP and RPC has been stopped.
  */
 void StopHTTPRPC();
+
+/** Set stdio_bus hooks for HTTP RPC (Phase 5: P2P/RPC degradation monitoring) */
+void SetHttpRpcStdioBusHooks(std::shared_ptr<node::StdioBusHooks> hooks);
 
 /** Start HTTP REST subsystem.
  * Precondition; HTTP and RPC has been started.

@@ -197,6 +197,141 @@ Stable event schema for baseline comparisons. All timestamps are monotonic micro
 | `end_us` | int64 | Monotonic timestamp at call end |
 | `success` | bool | Whether call succeeded |
 
+## Phase 5: P2P/RPC Degradation Events (#18678)
+
+Phase 5 adds comprehensive RPC/HTTP layer monitoring to diagnose and address
+P2P/RPC interference patterns on resource-constrained systems.
+
+### New Event Types
+
+#### RpcHttpEnqueueEvent
+Fired when an HTTP request is received and queued (or rejected).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `request_id` | int64 | Unique request identifier |
+| `uri` | string | Request URI (e.g., "/", "/wallet/") |
+| `peer_addr` | string | Client address |
+| `received_us` | int64 | When request was received |
+| `queue_depth` | int | Queue depth at admission time |
+| `max_queue_depth` | int | Maximum queue capacity |
+| `admitted` | bool | Whether request was admitted |
+| `reject_reason` | enum | Reason if rejected (None, QueueFull, P2PLoad, etc.) |
+
+#### RpcHttpDispatchEvent
+Fired when an HTTP request is dispatched to a worker thread.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `request_id` | int64 | Unique request identifier |
+| `enqueued_us` | int64 | When request was enqueued |
+| `dispatched_us` | int64 | When request was dispatched |
+| `worker_id` | int | Worker thread ID (0-based) |
+| `active_workers` | int | Number of active workers |
+| `total_workers` | int | Total worker pool size |
+
+#### RpcCallLifecycleEvent
+Comprehensive event capturing the entire RPC call lifecycle.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `request_id` | int64 | Unique request identifier |
+| `method` | string | RPC method name |
+| `peer_addr` | string | Client address |
+| `priority` | enum | Method priority (High/Medium/Low) |
+| `http_received_us` | int64 | HTTP request received |
+| `queue_entered_us` | int64 | Entered work queue |
+| `dispatch_us` | int64 | Dispatched to worker |
+| `parse_start_us` | int64 | JSON parsing started |
+| `exec_start_us` | int64 | RPC execution started |
+| `exec_end_us` | int64 | RPC execution completed |
+| `response_sent_us` | int64 | HTTP response sent |
+| `success` | bool | Whether call succeeded |
+| `http_status` | int | HTTP status code |
+| `response_size` | size_t | Response size in bytes |
+
+#### RpcBackpressureEvent
+Fired when a QoS/backpressure decision is made.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `request_id` | int64 | Unique request identifier |
+| `method` | string | RPC method (if known) |
+| `timestamp_us` | int64 | When decision was made |
+| `decision` | enum | Action taken (Admit/Reject/Throttle/Prioritize) |
+| `reason` | enum | Why this decision |
+| `queue_depth` | int | Current queue depth |
+| `active_rpc_calls` | int | Active RPC calls |
+| `p2p_load_score` | double | P2P subsystem load (0.0-1.0) |
+| `method_calls_last_sec` | int64 | Calls to this method in last second |
+
+#### P2PRpcInterferenceSnapshotEvent
+Periodic snapshot for correlation analysis.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp_us` | int64 | Snapshot timestamp |
+| `snapshot_interval_us` | int64 | Time since last snapshot |
+| `p2p_messages_processed` | int | Messages processed in interval |
+| `p2p_processing_us` | int64 | Total P2P processing time |
+| `p2p_queue_depth` | int | Current P2P message queue depth |
+| `connected_peers` | int | Number of connected peers |
+| `rpc_calls_completed` | int | RPC calls completed in interval |
+| `rpc_total_latency_us` | int64 | Total RPC latency in interval |
+| `rpc_queue_depth` | int | Current RPC queue depth |
+| `active_rpc_calls` | int | Currently executing RPC calls |
+| `rpc_latency_p50_us` | int64 | 50th percentile latency |
+| `rpc_latency_p95_us` | int64 | 95th percentile latency |
+| `rpc_latency_p99_us` | int64 | 99th percentile latency |
+| `p2p_load_score` | double | P2P load (0.0-1.0) |
+| `rpc_degradation_score` | double | RPC degradation vs baseline |
+| `interference_correlation` | double | Correlation coefficient |
+
+### RPC Method Priority Classification
+
+Methods are classified for QoS decisions:
+
+| Priority | Methods | Rationale |
+|----------|---------|-----------|
+| High | stop, getblockchaininfo, getnetworkinfo, ping, help | Critical control/status |
+| Medium | sendtoaddress, getnewaddress, etc. | Normal operations |
+| Low | scantxoutset, rescanblockchain, importwallet, getblock | Heavy/long-running |
+
+### Hook Points
+
+| File | Function | Hook |
+|------|----------|------|
+| `httpserver.cpp` | `http_request_cb()` | OnRpcHttpEnqueue |
+| `httpserver.cpp` | worker lambda | OnRpcHttpDispatch |
+| `httprpc.cpp` | `HTTPReq_JSONRPC()` | OnRpcCallLifecycle |
+| `httpserver.cpp` | queue full check | OnRpcBackpressure |
+
+### Phase 5 Latency Requirements
+
+| Hook | Max Latency | Rationale |
+|------|-------------|-----------|
+| `OnRpcHttpEnqueue` | ≤50μs | Called on every HTTP request |
+| `OnRpcHttpDispatch` | ≤50μs | Called when dispatching to worker |
+| `OnRpcCallLifecycle` | ≤100μs | Called after RPC completion |
+| `OnRpcBackpressure` | ≤50μs | Called on QoS decisions |
+| `OnP2PRpcInterferenceSnapshot` | ≤500μs | Called periodically (1/sec) |
+
+### Files Added/Modified
+
+**New files:**
+- `src/node/stdio_bus_rpc_metrics.h` - RPC metrics collector
+- `src/node/stdio_bus_rpc_metrics.cpp` - Implementation
+
+**Modified files:**
+- `src/node/stdio_bus_hooks.h` - Added Phase 5 event types and methods
+- `src/node/stdio_bus_sdk_hooks.h` - Added Phase 5 methods to SDK
+- `src/node/stdio_bus_sdk_hooks.cpp` - Added Phase 5 serialization
+- `src/httpserver.h` - Added SetHttpServerStdioBusHooks()
+- `src/httpserver.cpp` - Added hooks in http_request_cb()
+- `src/httprpc.h` - Added SetHttpRpcStdioBusHooks()
+- `src/httprpc.cpp` - Added hooks in HTTPReq_JSONRPC()
+- `src/test/stdio_bus_hooks_tests.cpp` - Added Phase 5 tests
+
 ## Consensus Safety Invariants
 
 1. **No consensus decisions through stdio_bus** - All validation logic unchanged
@@ -282,6 +417,20 @@ Shadow mode should track:
    `validated_us` if block wasn't tracked through `OnBlockReceived` first.
 
 3. **No RPC hooks yet** - `OnRpcCall` is defined but not wired in Phase 1.
+
+## Known Limitations (Phase 5)
+
+1. **Queue timing approximation** - `queue_entered_us` and `dispatch_us` in RpcCallLifecycleEvent
+   are approximations since exact timing requires deeper integration with ThreadPool.
+
+2. **Worker ID not tracked** - `worker_id` in RpcHttpDispatchEvent is always 0; actual worker
+   identification requires ThreadPool modifications.
+
+3. **P2P load score placeholder** - `p2p_load_score` in backpressure events is currently 0.0;
+   requires integration with P2P metrics from net_processing.
+
+4. **Interference snapshots not automated** - P2PRpcInterferenceSnapshotEvent requires manual
+   triggering or timer integration; not automatically fired in Phase 5.
 
 ## Test Requirements
 

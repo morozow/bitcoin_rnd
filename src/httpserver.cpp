@@ -11,6 +11,8 @@
 #include <logging.h>
 #include <netbase.h>
 #include <node/interface_ui.h>
+#include <node/stdio_bus_hooks.h>
+#include <node/stdio_bus_rpc_metrics.h>
 #include <rpc/protocol.h>
 #include <sync.h>
 #include <util/check.h>
@@ -77,6 +79,18 @@ static std::vector<evhttp_bound_socket *> boundSockets;
 //! Http thread pool - future: encapsulate in HttpContext
 static ThreadPool g_threadpool_http("http");
 static int g_max_queue_depth{100};
+
+//! stdio_bus hooks for RPC monitoring (Phase 5)
+static std::shared_ptr<node::StdioBusHooks> g_stdio_bus_hooks;
+
+/**
+ * @brief Set stdio_bus hooks for HTTP server
+ * Called from init.cpp when stdio_bus is enabled.
+ */
+void SetHttpServerStdioBusHooks(std::shared_ptr<node::StdioBusHooks> hooks)
+{
+    g_stdio_bus_hooks = std::move(hooks);
+}
 
 /**
  * @brief Helps keep track of open `evhttp_connection`s with active `evhttp_requests`
@@ -252,13 +266,92 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
 
     // Dispatch to worker thread
     if (i != iend) {
-        if (static_cast<int>(g_threadpool_http.WorkQueueSize()) >= g_max_queue_depth) {
+        int current_queue_depth = static_cast<int>(g_threadpool_http.WorkQueueSize());
+        int64_t request_id = node::GenerateRequestId();
+        int64_t received_us = node::GetMonotonicTimeUs();
+        
+        if (current_queue_depth >= g_max_queue_depth) {
             LogWarning("Request rejected because http work queue depth exceeded, it can be increased with the -rpcworkqueue= setting");
+            
+            // Phase 5: Fire enqueue event for rejected request
+            if (g_stdio_bus_hooks && g_stdio_bus_hooks->Enabled()) {
+                node::RpcHttpEnqueueEvent ev;
+                ev.request_id = request_id;
+                ev.uri = strURI;
+                ev.peer_addr = hreq->GetPeer().ToStringAddrPort();
+                ev.received_us = received_us;
+                ev.queue_depth = current_queue_depth;
+                ev.max_queue_depth = g_max_queue_depth;
+                ev.admitted = false;
+                ev.reject_reason = node::RpcBackpressureReason::QueueFull;
+                g_stdio_bus_hooks->OnRpcHttpEnqueue(ev);
+                
+                // Also fire backpressure event
+                node::RpcBackpressureEvent bp_ev;
+                bp_ev.request_id = request_id;
+                bp_ev.method = ""; // Unknown at this point
+                bp_ev.timestamp_us = received_us;
+                bp_ev.decision = node::RpcBackpressureDecision::Reject;
+                bp_ev.reason = node::RpcBackpressureReason::QueueFull;
+                bp_ev.queue_depth = current_queue_depth;
+                bp_ev.active_rpc_calls = node::g_stdio_bus_rpc_metrics ? 
+                    node::g_stdio_bus_rpc_metrics->GetActiveRpcCalls() : 0;
+                bp_ev.p2p_load_score = 0.0; // TODO: Get from P2P metrics
+                bp_ev.method_calls_last_sec = 0;
+                g_stdio_bus_hooks->OnRpcBackpressure(bp_ev);
+            }
+            
+            // Update metrics
+            if (node::g_stdio_bus_rpc_metrics) {
+                node::g_stdio_bus_rpc_metrics->RecordHttpEnqueue(false, current_queue_depth, g_max_queue_depth);
+            }
+            
             hreq->WriteReply(HTTP_SERVICE_UNAVAILABLE, "Work queue depth exceeded");
             return;
         }
 
-        auto item = [req = hreq, in_path = std::move(path), fn = i->handler]() {
+        // Phase 5: Fire enqueue event for admitted request
+        if (g_stdio_bus_hooks && g_stdio_bus_hooks->Enabled()) {
+            node::RpcHttpEnqueueEvent ev;
+            ev.request_id = request_id;
+            ev.uri = strURI;
+            ev.peer_addr = hreq->GetPeer().ToStringAddrPort();
+            ev.received_us = received_us;
+            ev.queue_depth = current_queue_depth;
+            ev.max_queue_depth = g_max_queue_depth;
+            ev.admitted = true;
+            ev.reject_reason = node::RpcBackpressureReason::None;
+            g_stdio_bus_hooks->OnRpcHttpEnqueue(ev);
+        }
+        
+        // Update metrics
+        if (node::g_stdio_bus_rpc_metrics) {
+            node::g_stdio_bus_rpc_metrics->RecordHttpEnqueue(true, current_queue_depth, g_max_queue_depth);
+        }
+
+        // Capture timing for dispatch event
+        int64_t enqueued_us = node::GetMonotonicTimeUs();
+        
+        auto item = [req = hreq, in_path = std::move(path), fn = i->handler, 
+                     request_id, enqueued_us]() {
+            // Phase 5: Fire dispatch event
+            if (g_stdio_bus_hooks && g_stdio_bus_hooks->Enabled()) {
+                node::RpcHttpDispatchEvent ev;
+                ev.request_id = request_id;
+                ev.enqueued_us = enqueued_us;
+                ev.dispatched_us = node::GetMonotonicTimeUs();
+                ev.worker_id = 0; // TODO: Get actual worker ID
+                ev.active_workers = 0; // TODO: Get from thread pool
+                ev.total_workers = 0; // TODO: Get from thread pool
+                g_stdio_bus_hooks->OnRpcHttpDispatch(ev);
+            }
+            
+            // Update metrics
+            if (node::g_stdio_bus_rpc_metrics) {
+                int64_t queue_wait_us = node::GetMonotonicTimeUs() - enqueued_us;
+                node::g_stdio_bus_rpc_metrics->RecordHttpDispatch(queue_wait_us);
+            }
+            
             std::string err_msg;
             try {
                 fn(req.get(), in_path);
