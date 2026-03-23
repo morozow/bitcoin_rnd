@@ -283,6 +283,138 @@ Shadow mode should track:
 
 3. **No RPC hooks yet** - `OnRpcCall` is defined but not wired in Phase 1.
 
+## Phase 4: Mempool Redesign Preparation (#27677)
+
+Phase 4 adds comprehensive mempool observability for the mempool redesign effort.
+
+### New Event Types
+
+#### TxAdmissionSource
+Identifies the source of transaction admission:
+- `P2P` (0) - Received from peer
+- `RPC` (1) - Submitted via RPC
+- `Reorg` (2) - Re-added after reorg
+- `Package` (3) - Part of package submission
+- `Wallet` (4) - From wallet
+
+#### MempoolAdmissionResult
+Result of mempool admission attempt:
+- `Accepted` (0) - Successfully added
+- `Rejected` (1) - Rejected (policy or consensus)
+- `MempoolEntry` (2) - Already in mempool
+- `DifferentWitness` (3) - Same txid, different witness
+- `PackageRejected` (4) - Rejected as part of package
+
+#### MempoolEvictionReason
+Reason for transaction eviction:
+- `SizeLimit` (0) - Mempool size limit
+- `Expiry` (1) - Transaction expired
+- `Reorg` (2) - Removed during reorg
+- `Replaced` (3) - Replaced by RBF
+- `Conflict` (4) - Conflicting transaction
+- `BlockConfirm` (5) - Confirmed in block
+
+### New Events
+
+#### MempoolAdmissionAttemptEvent
+Fired at entry to `AcceptToMemoryPool`:
+| Field | Type | Description |
+|-------|------|-------------|
+| `txid` | uint256 | Transaction ID |
+| `wtxid` | uint256 | Witness transaction ID |
+| `source` | TxAdmissionSource | Source of admission |
+| `vsize` | int32 | Virtual size |
+| `fee_sat` | int64 | Fee in satoshis |
+| `timestamp_us` | int64 | Monotonic timestamp |
+
+#### MempoolAdmissionResultEvent
+Fired at exit from `AcceptToMemoryPool`:
+| Field | Type | Description |
+|-------|------|-------------|
+| `txid` | uint256 | Transaction ID |
+| `wtxid` | uint256 | Witness transaction ID |
+| `result` | MempoolAdmissionResult | Admission result |
+| `reject_code` | int32 | Rejection code (0 if accepted) |
+| `reject_reason` | string | Rejection reason |
+| `replaced_count` | int32 | Number of replaced transactions |
+| `effective_feerate_sat_vb` | int64 | Effective feerate × 1000 |
+| `start_us` | int64 | Start timestamp |
+| `end_us` | int64 | End timestamp |
+
+#### PackageAdmissionEvent
+Fired for `ProcessNewPackage`:
+| Field | Type | Description |
+|-------|------|-------------|
+| `package_hash` | uint256 | Hash of sorted txids |
+| `strategy` | PackageOrderingStrategy | Ordering strategy used |
+| `tx_count` | int32 | Number of transactions |
+| `total_vsize` | int32 | Total virtual size |
+| `total_fees_sat` | int64 | Total fees |
+| `accepted_count` | int32 | Accepted transactions |
+| `rejected_count` | int32 | Rejected transactions |
+| `start_us` | int64 | Start timestamp |
+| `end_us` | int64 | End timestamp |
+
+#### MempoolBatchEvent
+Fired for batch operations (`Apply`, `TrimToSize`, etc.):
+| Field | Type | Description |
+|-------|------|-------------|
+| `batch_type` | MempoolBatchType | Type of batch operation |
+| `tx_count_in` | int32 | Transactions entering |
+| `tx_count_out` | int32 | Transactions remaining |
+| `bytes_affected` | int64 | Bytes affected |
+| `start_us` | int64 | Start timestamp |
+| `end_us` | int64 | End timestamp |
+
+#### MempoolOrderingEvent
+Fired for ordering/work operations:
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | MempoolOrderingPhase | Ordering phase |
+| `candidate_count` | int32 | Candidate transactions |
+| `cluster_count` | int32 | Number of clusters |
+| `work_budget` | int64 | Work budget |
+| `work_used` | int64 | Work consumed |
+| `start_us` | int64 | Start timestamp |
+| `end_us` | int64 | End timestamp |
+
+#### MempoolEvictionEvent
+Fired when transactions are evicted:
+| Field | Type | Description |
+|-------|------|-------------|
+| `reason` | MempoolEvictionReason | Eviction reason |
+| `tx_count` | int32 | Transactions evicted |
+| `bytes_removed` | int64 | Bytes removed |
+| `fees_removed_sat` | int64 | Fees removed |
+| `timestamp_us` | int64 | Monotonic timestamp |
+
+### Hook Points
+
+| Location | Event | Description |
+|----------|-------|-------------|
+| `validation.cpp:AcceptToMemoryPool` entry | `OnMempoolAdmissionAttempt` | Track admission start |
+| `validation.cpp:AcceptToMemoryPool` exit | `OnMempoolAdmissionResult` | Track admission result |
+| `validation.cpp:ProcessNewPackage` | `OnPackageAdmission` | Track package processing |
+| `txmempool.cpp:Apply` | `OnMempoolBatch`, `OnMempoolOrdering` | Track batch operations |
+| `txmempool.cpp:TrimToSize` | `OnMempoolEviction` | Track size limit evictions |
+| `txmempool.cpp:Expire` | `OnMempoolEviction` | Track expiry evictions |
+
+### Metrics Enabled
+
+| Metric | Description |
+|--------|-------------|
+| `tx_admission_latency_us` | End-to-end admission latency |
+| `package_admission_latency_us` | Package processing latency |
+| `admission_throughput_tps` | Transactions per second |
+| `mempool_lock_wait_us` | Lock contention time |
+| `ordering_cost_us` | TxGraph work cost |
+| `eviction_rate` | Evictions per second by reason |
+
+### Wiring
+
+stdio_bus_hooks is wired to mempool via `MemPoolOptions::stdio_bus_hooks` in `init.cpp` 
+after PeerManager creation. This ensures hooks are available for all mempool operations.
+
 ## Test Requirements
 
 Before merge, all changes must pass:

@@ -73,6 +73,15 @@ public:
     void OnMsgHandlerLoop(const MsgHandlerLoopEvent& ev) override;
     void OnRpcCall(const RpcCallEvent& ev) override;
 
+    // Phase 4: Mempool Events
+    void OnMempoolAdmissionAttempt(const MempoolAdmissionAttemptEvent& ev) override;
+    void OnMempoolAdmissionResult(const MempoolAdmissionResultEvent& ev) override;
+    void OnPackageAdmission(const PackageAdmissionEvent& ev) override;
+    void OnMempoolBatch(const MempoolBatchEvent& ev) override;
+    void OnMempoolOrdering(const MempoolOrderingEvent& ev) override;
+    void OnMempoolLockContention(const MempoolLockContentionEvent& ev) override;
+    void OnMempoolEviction(const MempoolEvictionEvent& ev) override;
+
     // ========== Lifecycle ==========
 
     /** Start the background worker and SDK connection */
@@ -101,7 +110,15 @@ private:
         BlockValidatedEvent,
         TxAdmissionEvent,
         MsgHandlerLoopEvent,
-        RpcCallEvent
+        RpcCallEvent,
+        // Phase 4: Mempool Events
+        MempoolAdmissionAttemptEvent,
+        MempoolAdmissionResultEvent,
+        PackageAdmissionEvent,
+        MempoolBatchEvent,
+        MempoolOrderingEvent,
+        MempoolLockContentionEvent,
+        MempoolEvictionEvent
     >;
 
     /** Try to enqueue an event (non-blocking) */

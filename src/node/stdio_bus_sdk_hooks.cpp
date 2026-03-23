@@ -233,6 +233,115 @@ void StdioBusSdkHooks::OnRpcCall(const RpcCallEvent& ev)
 }
 
 // ============================================================================
+// Phase 4: Mempool Hook Implementations
+// ============================================================================
+
+void StdioBusSdkHooks::OnMempoolAdmissionAttempt(const MempoolAdmissionAttemptEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMempoolAdmissionResult(const MempoolAdmissionResultEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnPackageAdmission(const PackageAdmissionEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMempoolBatch(const MempoolBatchEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMempoolOrdering(const MempoolOrderingEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMempoolLockContention(const MempoolLockContentionEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnMempoolEviction(const MempoolEvictionEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ============================================================================
 // Queue Operations
 // ============================================================================
 
@@ -380,6 +489,77 @@ std::string StdioBusSdkHooks::SerializeEvent(const Event& ev) const
                << "\"start_us\":" << arg.start_us << ","
                << "\"end_us\":" << arg.end_us << ","
                << "\"success\":" << (arg.success ? "true" : "false");
+        }
+        // Phase 4: Mempool Events
+        else if constexpr (std::is_same_v<T, MempoolAdmissionAttemptEvent>) {
+            ss << "\"type\":\"mempool_admission_attempt\","
+               << "\"txid\":\"" << arg.txid.GetHex() << "\","
+               << "\"wtxid\":\"" << arg.wtxid.GetHex() << "\","
+               << "\"source\":" << static_cast<int>(arg.source) << ","
+               << "\"vsize\":" << arg.vsize << ","
+               << "\"fee_sat\":" << arg.fee_sat << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, MempoolAdmissionResultEvent>) {
+            ss << "\"type\":\"mempool_admission_result\","
+               << "\"txid\":\"" << arg.txid.GetHex() << "\","
+               << "\"wtxid\":\"" << arg.wtxid.GetHex() << "\","
+               << "\"result\":" << static_cast<int>(arg.result) << ","
+               << "\"reject_code\":" << arg.reject_code << ","
+               << "\"replaced_count\":" << arg.replaced_count << ","
+               << "\"effective_feerate_sat_vb\":" << arg.effective_feerate_sat_vb << ","
+               << "\"start_us\":" << arg.start_us << ","
+               << "\"end_us\":" << arg.end_us;
+            if (!arg.reject_reason.empty()) {
+                ss << ",\"reject_reason\":\"" << arg.reject_reason << "\"";
+            }
+        }
+        else if constexpr (std::is_same_v<T, PackageAdmissionEvent>) {
+            ss << "\"type\":\"package_admission\","
+               << "\"package_hash\":\"" << arg.package_hash.GetHex() << "\","
+               << "\"strategy\":" << static_cast<int>(arg.strategy) << ","
+               << "\"tx_count\":" << arg.tx_count << ","
+               << "\"total_vsize\":" << arg.total_vsize << ","
+               << "\"total_fees_sat\":" << arg.total_fees_sat << ","
+               << "\"accepted_count\":" << arg.accepted_count << ","
+               << "\"rejected_count\":" << arg.rejected_count << ","
+               << "\"start_us\":" << arg.start_us << ","
+               << "\"end_us\":" << arg.end_us;
+        }
+        else if constexpr (std::is_same_v<T, MempoolBatchEvent>) {
+            ss << "\"type\":\"mempool_batch\","
+               << "\"batch_type\":" << static_cast<int>(arg.batch_type) << ","
+               << "\"tx_count_in\":" << arg.tx_count_in << ","
+               << "\"tx_count_out\":" << arg.tx_count_out << ","
+               << "\"bytes_affected\":" << arg.bytes_affected << ","
+               << "\"start_us\":" << arg.start_us << ","
+               << "\"end_us\":" << arg.end_us;
+        }
+        else if constexpr (std::is_same_v<T, MempoolOrderingEvent>) {
+            ss << "\"type\":\"mempool_ordering\","
+               << "\"phase\":" << static_cast<int>(arg.phase) << ","
+               << "\"candidate_count\":" << arg.candidate_count << ","
+               << "\"cluster_count\":" << arg.cluster_count << ","
+               << "\"work_budget\":" << arg.work_budget << ","
+               << "\"work_used\":" << arg.work_used << ","
+               << "\"start_us\":" << arg.start_us << ","
+               << "\"end_us\":" << arg.end_us;
+        }
+        else if constexpr (std::is_same_v<T, MempoolLockContentionEvent>) {
+            ss << "\"type\":\"mempool_lock_contention\","
+               << "\"lock_name\":\"" << arg.lock_name << "\","
+               << "\"context\":\"" << arg.context << "\","
+               << "\"wait_us\":" << arg.wait_us << ","
+               << "\"hold_us\":" << arg.hold_us << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, MempoolEvictionEvent>) {
+            ss << "\"type\":\"mempool_eviction\","
+               << "\"reason\":" << static_cast<int>(arg.reason) << ","
+               << "\"tx_count\":" << arg.tx_count << ","
+               << "\"bytes_removed\":" << arg.bytes_removed << ","
+               << "\"fees_removed_sat\":" << arg.fees_removed_sat << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
         }
     }, ev);
     

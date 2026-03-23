@@ -89,6 +89,137 @@ struct RpcCallEvent {
     bool success;
 };
 
+// ============================================================================
+// Phase 4: Mempool Redesign Preparation Events (#27677)
+// ============================================================================
+
+/** Source of transaction admission */
+enum class TxAdmissionSource : uint8_t {
+    P2P = 0,      // Received from peer
+    RPC = 1,      // Submitted via RPC
+    Reorg = 2,    // Re-added after reorg
+    Package = 3,  // Part of package submission
+    Wallet = 4    // From wallet
+};
+
+/** Result of mempool admission attempt */
+enum class MempoolAdmissionResult : uint8_t {
+    Accepted = 0,           // Successfully added to mempool
+    Rejected = 1,           // Rejected (policy or consensus)
+    MempoolEntry = 2,       // Already in mempool
+    DifferentWitness = 3,   // Same txid, different witness
+    PackageRejected = 4     // Rejected as part of package
+};
+
+/** Mempool batch operation type */
+enum class MempoolBatchType : uint8_t {
+    ChangesetApply = 0,   // Apply changeset from validation
+    ReorgUpdate = 1,      // Update after reorg
+    Trim = 2,             // Size limit trim
+    Expire = 3,           // Expiry cleanup
+    BlockConnect = 4      // Block connected, remove confirmed
+};
+
+/** Mempool ordering phase */
+enum class MempoolOrderingPhase : uint8_t {
+    TxGraphDoWork = 0,        // TxGraph work processing
+    TrimWorstChunk = 1,       // Trim worst feerate chunk
+    ClusterLinearization = 2  // Cluster linearization
+};
+
+/** Mempool eviction reason */
+enum class MempoolEvictionReason : uint8_t {
+    SizeLimit = 0,    // Mempool size limit
+    Expiry = 1,       // Transaction expired
+    Reorg = 2,        // Removed during reorg
+    Replaced = 3,     // Replaced by RBF
+    Conflict = 4,     // Conflicting transaction
+    BlockConfirm = 5  // Confirmed in block
+};
+
+/** Package ordering strategy for comparison */
+enum class PackageOrderingStrategy : uint8_t {
+    Arrival = 0,        // Process in arrival order
+    AncestorFirst = 1,  // Process ancestors before descendants
+    FeerateFirst = 2,   // Process by feerate descending
+    ClusterAware = 3    // Cluster-aware ordering
+};
+
+/** Mempool admission attempt event - fired at entry to AcceptToMemoryPool */
+struct MempoolAdmissionAttemptEvent {
+    uint256 txid;
+    uint256 wtxid;
+    TxAdmissionSource source;
+    int32_t vsize;
+    int64_t fee_sat;
+    int64_t timestamp_us;
+};
+
+/** Mempool admission result event - fired at exit from AcceptToMemoryPool */
+struct MempoolAdmissionResultEvent {
+    uint256 txid;
+    uint256 wtxid;
+    MempoolAdmissionResult result;
+    int32_t reject_code;              // 0 if accepted
+    std::string reject_reason;        // Empty if accepted
+    int32_t replaced_count;           // Number of replaced transactions
+    int64_t effective_feerate_sat_vb; // Effective feerate in sat/vB * 1000
+    int64_t start_us;
+    int64_t end_us;
+};
+
+/** Package admission event - for ProcessNewPackage */
+struct PackageAdmissionEvent {
+    uint256 package_hash;             // Hash of sorted txids
+    PackageOrderingStrategy strategy;
+    int32_t tx_count;
+    int32_t total_vsize;
+    int64_t total_fees_sat;
+    int32_t accepted_count;
+    int32_t rejected_count;
+    int64_t start_us;
+    int64_t end_us;
+};
+
+/** Mempool batch operation event */
+struct MempoolBatchEvent {
+    MempoolBatchType batch_type;
+    int32_t tx_count_in;
+    int32_t tx_count_out;
+    int64_t bytes_affected;
+    int64_t start_us;
+    int64_t end_us;
+};
+
+/** Mempool ordering/work event */
+struct MempoolOrderingEvent {
+    MempoolOrderingPhase phase;
+    int32_t candidate_count;
+    int32_t cluster_count;
+    int64_t work_budget;
+    int64_t work_used;
+    int64_t start_us;
+    int64_t end_us;
+};
+
+/** Mempool lock contention event */
+struct MempoolLockContentionEvent {
+    std::string lock_name;            // "mempool.cs", "cs_main"
+    std::string context;              // "atmp", "package", "trim", "reorg"
+    int64_t wait_us;                  // Time waiting for lock
+    int64_t hold_us;                  // Time holding lock
+    int64_t timestamp_us;
+};
+
+/** Mempool eviction event */
+struct MempoolEvictionEvent {
+    MempoolEvictionReason reason;
+    int32_t tx_count;
+    int64_t bytes_removed;
+    int64_t fees_removed_sat;
+    int64_t timestamp_us;
+};
+
 /**
  * @brief stdio_bus mode enum
  */
@@ -173,6 +304,29 @@ public:
 
     /** Called after RPC call completes */
     virtual void OnRpcCall(const RpcCallEvent& event) = 0;
+
+    // ========== Phase 4: Mempool Events (#27677) ==========
+
+    /** Called at entry to AcceptToMemoryPool */
+    virtual void OnMempoolAdmissionAttempt(const MempoolAdmissionAttemptEvent& event) = 0;
+
+    /** Called at exit from AcceptToMemoryPool */
+    virtual void OnMempoolAdmissionResult(const MempoolAdmissionResultEvent& event) = 0;
+
+    /** Called for package admission (ProcessNewPackage) */
+    virtual void OnPackageAdmission(const PackageAdmissionEvent& event) = 0;
+
+    /** Called for mempool batch operations */
+    virtual void OnMempoolBatch(const MempoolBatchEvent& event) = 0;
+
+    /** Called for mempool ordering/work operations */
+    virtual void OnMempoolOrdering(const MempoolOrderingEvent& event) = 0;
+
+    /** Called when lock contention is detected */
+    virtual void OnMempoolLockContention(const MempoolLockContentionEvent& event) = 0;
+
+    /** Called when transactions are evicted from mempool */
+    virtual void OnMempoolEviction(const MempoolEvictionEvent& event) = 0;
 };
 
 /**
@@ -192,6 +346,15 @@ public:
     void OnTxAdmission(const TxAdmissionEvent&) override {}
     void OnMsgHandlerLoop(const MsgHandlerLoopEvent&) override {}
     void OnRpcCall(const RpcCallEvent&) override {}
+    
+    // Phase 4: Mempool Events
+    void OnMempoolAdmissionAttempt(const MempoolAdmissionAttemptEvent&) override {}
+    void OnMempoolAdmissionResult(const MempoolAdmissionResultEvent&) override {}
+    void OnPackageAdmission(const PackageAdmissionEvent&) override {}
+    void OnMempoolBatch(const MempoolBatchEvent&) override {}
+    void OnMempoolOrdering(const MempoolOrderingEvent&) override {}
+    void OnMempoolLockContention(const MempoolLockContentionEvent&) override {}
+    void OnMempoolEviction(const MempoolEvictionEvent&) override {}
 };
 
 /**

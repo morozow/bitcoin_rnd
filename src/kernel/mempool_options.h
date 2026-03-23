@@ -11,9 +11,14 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 class ValidationSignals;
+
+namespace node {
+class StdioBusHooks;
+} // namespace node
 
 /** Default for -maxmempool, maximum megabytes of mempool memory usage */
 static constexpr unsigned int DEFAULT_MAX_MEMPOOL_SIZE_MB{300};
@@ -57,6 +62,9 @@ struct MemPoolOptions {
     MemPoolLimits limits{};
 
     ValidationSignals* signals{nullptr};
+    
+    /** stdio_bus hooks for mempool observability (Phase 4) */
+    std::shared_ptr<node::StdioBusHooks> stdio_bus_hooks{nullptr};
 };
 } // namespace kernel
 

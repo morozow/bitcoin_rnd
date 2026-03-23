@@ -1917,6 +1917,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                                      peerman_opts);
     validation_signals.RegisterValidationInterface(node.peerman.get());
 
+    // Wire stdio_bus_hooks to mempool for Phase 4 observability
+    if (peerman_opts.stdio_bus_mode != node::StdioBusMode::Off && peerman_opts.stdio_bus_hooks) {
+        node.mempool->m_opts.stdio_bus_hooks = peerman_opts.stdio_bus_hooks;
+        LogInfo("stdio_bus hooks wired to mempool");
+    }
+
     // ********************************************************* Step 8: start indexers
 
     if (args.GetBoolArg("-txindex", DEFAULT_TXINDEX)) {

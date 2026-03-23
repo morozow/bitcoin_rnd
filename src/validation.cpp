@@ -63,6 +63,7 @@
 #include <util/trace.h>
 #include <util/translation.h>
 #include <validationinterface.h>
+#include <node/stdio_bus_hooks.h>
 
 #include <algorithm>
 #include <cassert>
@@ -1780,11 +1781,29 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
     assert(active_chainstate.GetMempool() != nullptr);
     CTxMemPool& pool{*active_chainstate.GetMempool()};
 
+    // Phase 4: Track admission attempt
+    const int64_t start_us = node::GetMonotonicTimeUs();
+    
+    // Phase 4: Emit admission attempt event
+    if (pool.m_opts.stdio_bus_hooks && pool.m_opts.stdio_bus_hooks->Enabled()) {
+        node::MempoolAdmissionAttemptEvent attempt_ev{
+            .txid = tx->GetHash(),
+            .wtxid = tx->GetWitnessHash(),
+            .source = node::TxAdmissionSource::P2P, // Default, could be refined
+            .vsize = static_cast<int32_t>(GetVirtualTransactionSize(*tx)),
+            .fee_sat = 0, // Unknown at this point
+            .timestamp_us = start_us
+        };
+        pool.m_opts.stdio_bus_hooks->OnMempoolAdmissionAttempt(attempt_ev);
+    }
+
     std::vector<COutPoint> coins_to_uncache;
 
     auto args = MemPoolAccept::ATMPArgs::SingleAccept(chainparams, accept_time, bypass_limits, coins_to_uncache, test_accept);
     MempoolAcceptResult result = MemPoolAccept(pool, active_chainstate).AcceptSingleTransactionAndCleanup(tx, args);
 
+    const int64_t end_us = node::GetMonotonicTimeUs();
+    
     if (result.m_result_type != MempoolAcceptResult::ResultType::VALID) {
         // Remove coins that were not present in the coins cache before calling
         // AcceptSingleTransaction(); this is to prevent memory DoS in case we receive a large
@@ -1797,7 +1816,45 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
                 tx->GetHash().data(),
                 result.m_state.GetRejectReason().c_str()
         );
+        
+        // Phase 4: Emit rejection result event
+        if (pool.m_opts.stdio_bus_hooks && pool.m_opts.stdio_bus_hooks->Enabled()) {
+            node::MempoolAdmissionResultEvent result_ev{
+                .txid = tx->GetHash(),
+                .wtxid = tx->GetWitnessHash(),
+                .result = node::MempoolAdmissionResult::Rejected,
+                .reject_code = result.m_state.GetRejectCode(),
+                .reject_reason = result.m_state.GetRejectReason(),
+                .replaced_count = 0,
+                .effective_feerate_sat_vb = 0,
+                .start_us = start_us,
+                .end_us = end_us
+            };
+            pool.m_opts.stdio_bus_hooks->OnMempoolAdmissionResult(result_ev);
+        }
+    } else {
+        // Phase 4: Emit acceptance result event
+        if (pool.m_opts.stdio_bus_hooks && pool.m_opts.stdio_bus_hooks->Enabled()) {
+            int64_t effective_feerate = 0;
+            if (result.m_effective_feerate.has_value()) {
+                effective_feerate = result.m_effective_feerate->GetFeePerK();
+            }
+            node::MempoolAdmissionResultEvent result_ev{
+                .txid = tx->GetHash(),
+                .wtxid = tx->GetWitnessHash(),
+                .result = node::MempoolAdmissionResult::Accepted,
+                .reject_code = 0,
+                .reject_reason = "",
+                .replaced_count = result.m_replaced_transactions.has_value() 
+                    ? static_cast<int32_t>(result.m_replaced_transactions->size()) : 0,
+                .effective_feerate_sat_vb = effective_feerate,
+                .start_us = start_us,
+                .end_us = end_us
+            };
+            pool.m_opts.stdio_bus_hooks->OnMempoolAdmissionResult(result_ev);
+        }
     }
+    
     // After we've (potentially) uncached entries, ensure our coins cache is still within its size limits
     BlockValidationState state_dummy;
     active_chainstate.FlushStateToDisk(state_dummy, FlushStateMode::PERIODIC);
@@ -1811,6 +1868,31 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
     assert(!package.empty());
     assert(std::all_of(package.cbegin(), package.cend(), [](const auto& tx){return tx != nullptr;}));
 
+    // Phase 4: Track package admission
+    const int64_t start_us = node::GetMonotonicTimeUs();
+    
+    // Calculate package hash (hash of sorted txids)
+    uint256 package_hash;
+    {
+        std::vector<uint256> txids;
+        txids.reserve(package.size());
+        for (const auto& tx : package) {
+            txids.push_back(tx->GetHash());
+        }
+        std::sort(txids.begin(), txids.end());
+        HashWriter hasher{};
+        for (const auto& txid : txids) {
+            hasher << txid;
+        }
+        package_hash = hasher.GetHash();
+    }
+    
+    // Calculate total vsize and fees
+    int32_t total_vsize = 0;
+    for (const auto& tx : package) {
+        total_vsize += GetVirtualTransactionSize(*tx);
+    }
+
     std::vector<COutPoint> coins_to_uncache;
     const CChainParams& chainparams = active_chainstate.m_chainman.GetParams();
     auto result = [&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
@@ -1823,6 +1905,39 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
             return MemPoolAccept(pool, active_chainstate).AcceptPackage(package, args);
         }
     }();
+
+    const int64_t end_us = node::GetMonotonicTimeUs();
+    
+    // Phase 4: Emit package admission event
+    if (pool.m_opts.stdio_bus_hooks && pool.m_opts.stdio_bus_hooks->Enabled()) {
+        int32_t accepted_count = 0;
+        int32_t rejected_count = 0;
+        int64_t total_fees = 0;
+        
+        for (const auto& [wtxid, tx_result] : result.m_tx_results) {
+            if (tx_result.m_result_type == MempoolAcceptResult::ResultType::VALID) {
+                ++accepted_count;
+                if (tx_result.m_base_fees.has_value()) {
+                    total_fees += *tx_result.m_base_fees;
+                }
+            } else {
+                ++rejected_count;
+            }
+        }
+        
+        node::PackageAdmissionEvent ev{
+            .package_hash = package_hash,
+            .strategy = node::PackageOrderingStrategy::AncestorFirst, // Default for child-with-parents
+            .tx_count = static_cast<int32_t>(package.size()),
+            .total_vsize = total_vsize,
+            .total_fees_sat = total_fees,
+            .accepted_count = accepted_count,
+            .rejected_count = rejected_count,
+            .start_us = start_us,
+            .end_us = end_us
+        };
+        pool.m_opts.stdio_bus_hooks->OnPackageAdmission(ev);
+    }
 
     // Uncache coins pertaining to transactions that were not submitted to the mempool.
     if (test_accept || result.m_state.IsInvalid()) {

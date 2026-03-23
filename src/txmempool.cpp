@@ -11,6 +11,7 @@
 #include <consensus/consensus.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <node/stdio_bus_hooks.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <random.h>
@@ -206,6 +207,12 @@ void CTxMemPool::AddTransactionsUpdated(unsigned int n)
 void CTxMemPool::Apply(ChangeSet* changeset)
 {
     AssertLockHeld(cs);
+    
+    // Phase 4: Track batch operation
+    const int64_t batch_start_us = node::GetMonotonicTimeUs();
+    const int32_t tx_count_in = static_cast<int32_t>(changeset->m_entry_vec.size());
+    const int32_t tx_count_removed = static_cast<int32_t>(changeset->m_to_remove.size());
+    
     m_txgraph->CommitStaging();
 
     RemoveStaged(changeset->m_to_remove, MemPoolRemovalReason::REPLACED);
@@ -221,8 +228,36 @@ void CTxMemPool::Apply(ChangeSet* changeset)
 
         addNewTransaction(it);
     }
+    
+    // Phase 4: Track ordering work
+    const int64_t ordering_start_us = node::GetMonotonicTimeUs();
     if (!m_txgraph->DoWork(/*max_cost=*/POST_CHANGE_COST)) {
         LogDebug(BCLog::MEMPOOL, "Mempool in non-optimal ordering after addition(s).");
+    }
+    const int64_t ordering_end_us = node::GetMonotonicTimeUs();
+    
+    // Phase 4: Emit batch and ordering events
+    if (m_opts.stdio_bus_hooks && m_opts.stdio_bus_hooks->Enabled()) {
+        node::MempoolBatchEvent batch_ev{
+            .batch_type = node::MempoolBatchType::ChangesetApply,
+            .tx_count_in = tx_count_in,
+            .tx_count_out = tx_count_in - tx_count_removed,
+            .bytes_affected = 0, // TODO: track bytes
+            .start_us = batch_start_us,
+            .end_us = ordering_end_us
+        };
+        m_opts.stdio_bus_hooks->OnMempoolBatch(batch_ev);
+        
+        node::MempoolOrderingEvent ordering_ev{
+            .phase = node::MempoolOrderingPhase::TxGraphDoWork,
+            .candidate_count = tx_count_in,
+            .cluster_count = 0, // TODO: track clusters
+            .work_budget = POST_CHANGE_COST,
+            .work_used = 0, // TODO: track actual work
+            .start_us = ordering_start_us,
+            .end_us = ordering_end_us
+        };
+        m_opts.stdio_bus_hooks->OnMempoolOrdering(ordering_ev);
     }
 }
 
@@ -822,7 +857,29 @@ int CTxMemPool::Expire(std::chrono::seconds time)
     for (txiter removeit : toremove) {
         CalculateDescendants(removeit, stage);
     }
+    
+    // Phase 4: Track eviction stats before removal
+    int64_t total_bytes_removed = 0;
+    CAmount total_fees_removed = 0;
+    for (const auto& entry_it : stage) {
+        total_bytes_removed += entry_it->GetTxSize();
+        total_fees_removed += entry_it->GetFee();
+    }
+    
     RemoveStaged(stage, MemPoolRemovalReason::EXPIRY);
+    
+    // Phase 4: Emit eviction event for expiry
+    if (!stage.empty() && m_opts.stdio_bus_hooks && m_opts.stdio_bus_hooks->Enabled()) {
+        node::MempoolEvictionEvent ev{
+            .reason = node::MempoolEvictionReason::Expiry,
+            .tx_count = static_cast<int32_t>(stage.size()),
+            .bytes_removed = total_bytes_removed,
+            .fees_removed_sat = total_fees_removed,
+            .timestamp_us = node::GetMonotonicTimeUs()
+        };
+        m_opts.stdio_bus_hooks->OnMempoolEviction(ev);
+    }
+    
     return stage.size();
 }
 
@@ -864,6 +921,8 @@ void CTxMemPool::TrimToSize(size_t sizelimit, std::vector<COutPoint>* pvNoSpends
 
     unsigned nTxnRemoved = 0;
     CFeeRate maxFeeRateRemoved(0);
+    int64_t total_bytes_removed = 0;
+    CAmount total_fees_removed = 0;
 
     while (!mapTx.empty() && DynamicMemoryUsage() > sizelimit) {
         const auto &[worst_chunk, feeperweight] = m_txgraph->GetWorstMainChunk();
@@ -890,7 +949,10 @@ void CTxMemPool::TrimToSize(size_t sizelimit, std::vector<COutPoint>* pvNoSpends
 
         setEntries stage;
         for (auto ref : worst_chunk) {
-            stage.insert(mapTx.iterator_to(static_cast<const CTxMemPoolEntry&>(*ref)));
+            const auto& entry = static_cast<const CTxMemPoolEntry&>(*ref);
+            total_bytes_removed += entry.GetTxSize();
+            total_fees_removed += entry.GetFee();
+            stage.insert(mapTx.iterator_to(entry));
         }
         for (auto e : stage) {
             removeUnchecked(e, MemPoolRemovalReason::SIZELIMIT);
@@ -907,6 +969,18 @@ void CTxMemPool::TrimToSize(size_t sizelimit, std::vector<COutPoint>* pvNoSpends
 
     if (maxFeeRateRemoved > CFeeRate(0)) {
         LogDebug(BCLog::MEMPOOL, "Removed %u txn, rolling minimum fee bumped to %s\n", nTxnRemoved, maxFeeRateRemoved.ToString());
+    }
+    
+    // Phase 4: Emit eviction event for size limit trimming
+    if (nTxnRemoved > 0 && m_opts.stdio_bus_hooks && m_opts.stdio_bus_hooks->Enabled()) {
+        node::MempoolEvictionEvent ev{
+            .reason = node::MempoolEvictionReason::SizeLimit,
+            .tx_count = static_cast<int32_t>(nTxnRemoved),
+            .bytes_removed = total_bytes_removed,
+            .fees_removed_sat = total_fees_removed,
+            .timestamp_us = node::GetMonotonicTimeUs()
+        };
+        m_opts.stdio_bus_hooks->OnMempoolEviction(ev);
     }
 }
 

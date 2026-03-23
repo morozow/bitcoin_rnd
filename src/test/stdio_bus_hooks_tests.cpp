@@ -145,6 +145,42 @@ public:
         m_rpc_calls.push_back(ev);
     }
     
+    // Phase 4: Mempool Events
+    void OnMempoolAdmissionAttempt(const MempoolAdmissionAttemptEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_admission_attempts.push_back(ev);
+    }
+    
+    void OnMempoolAdmissionResult(const MempoolAdmissionResultEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_admission_results.push_back(ev);
+    }
+    
+    void OnPackageAdmission(const PackageAdmissionEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_package_admissions.push_back(ev);
+    }
+    
+    void OnMempoolBatch(const MempoolBatchEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_batches.push_back(ev);
+    }
+    
+    void OnMempoolOrdering(const MempoolOrderingEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_orderings.push_back(ev);
+    }
+    
+    void OnMempoolLockContention(const MempoolLockContentionEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_lock_contentions.push_back(ev);
+    }
+    
+    void OnMempoolEviction(const MempoolEvictionEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_evictions.push_back(ev);
+    }
+    
     // Accessors
     size_t MessageCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_messages.size(); }
     size_t HeadersCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_headers.size(); }
@@ -152,9 +188,24 @@ public:
     size_t BlocksValidatedCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_blocks_validated.size(); }
     size_t TxAdmissionsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_tx_admissions.size(); }
     
+    // Phase 4 accessors
+    size_t MempoolAdmissionAttemptsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_admission_attempts.size(); }
+    size_t MempoolAdmissionResultsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_admission_results.size(); }
+    size_t PackageAdmissionsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_package_admissions.size(); }
+    size_t MempoolBatchesCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_batches.size(); }
+    size_t MempoolOrderingsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_orderings.size(); }
+    size_t MempoolEvictionsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_evictions.size(); }
+    
     MessageEvent GetMessage(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_messages.at(i); }
     HeadersEvent GetHeaders(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_headers.at(i); }
     BlockValidatedEvent GetBlockValidated(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_blocks_validated.at(i); }
+    
+    // Phase 4 getters
+    MempoolAdmissionAttemptEvent GetMempoolAdmissionAttempt(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_admission_attempts.at(i); }
+    MempoolAdmissionResultEvent GetMempoolAdmissionResult(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_admission_results.at(i); }
+    PackageAdmissionEvent GetPackageAdmission(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_package_admissions.at(i); }
+    MempoolBatchEvent GetMempoolBatch(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_batches.at(i); }
+    MempoolEvictionEvent GetMempoolEviction(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_mempool_evictions.at(i); }
     
     bool m_enabled{true};
     
@@ -167,6 +218,14 @@ private:
     std::vector<TxAdmissionEvent> m_tx_admissions;
     std::vector<MsgHandlerLoopEvent> m_loop_events;
     std::vector<RpcCallEvent> m_rpc_calls;
+    // Phase 4
+    std::vector<MempoolAdmissionAttemptEvent> m_mempool_admission_attempts;
+    std::vector<MempoolAdmissionResultEvent> m_mempool_admission_results;
+    std::vector<PackageAdmissionEvent> m_package_admissions;
+    std::vector<MempoolBatchEvent> m_mempool_batches;
+    std::vector<MempoolOrderingEvent> m_mempool_orderings;
+    std::vector<MempoolLockContentionEvent> m_mempool_lock_contentions;
+    std::vector<MempoolEvictionEvent> m_mempool_evictions;
 };
 
 BOOST_AUTO_TEST_CASE(recording_hooks_capture_events)
@@ -393,6 +452,270 @@ BOOST_AUTO_TEST_CASE(latency_measurement)
     BOOST_CHECK(latency_us >= 1000);
     // Should be less than 100ms (sanity check)
     BOOST_CHECK(latency_us < 100000);
+}
+
+// ============================================================================
+// Phase 4: Mempool Event Tests
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(noop_hooks_phase4_safe_to_call)
+{
+    NoOpStdioBusHooks hooks;
+    
+    // All Phase 4 hook calls should be safe no-ops
+    MempoolAdmissionAttemptEvent attempt_ev{
+        .txid = uint256::ZERO,
+        .wtxid = uint256::ZERO,
+        .source = TxAdmissionSource::P2P,
+        .vsize = 250,
+        .fee_sat = 1000,
+        .timestamp_us = 0
+    };
+    hooks.OnMempoolAdmissionAttempt(attempt_ev);
+    
+    MempoolAdmissionResultEvent result_ev{
+        .txid = uint256::ZERO,
+        .wtxid = uint256::ZERO,
+        .result = MempoolAdmissionResult::Accepted,
+        .reject_code = 0,
+        .reject_reason = {},
+        .replaced_count = 0,
+        .effective_feerate_sat_vb = 4000,
+        .start_us = 0,
+        .end_us = 100
+    };
+    hooks.OnMempoolAdmissionResult(result_ev);
+    
+    PackageAdmissionEvent pkg_ev{
+        .package_hash = uint256::ZERO,
+        .strategy = PackageOrderingStrategy::AncestorFirst,
+        .tx_count = 2,
+        .total_vsize = 500,
+        .total_fees_sat = 2000,
+        .accepted_count = 2,
+        .rejected_count = 0,
+        .start_us = 0,
+        .end_us = 200
+    };
+    hooks.OnPackageAdmission(pkg_ev);
+    
+    MempoolBatchEvent batch_ev{
+        .batch_type = MempoolBatchType::ChangesetApply,
+        .tx_count_in = 5,
+        .tx_count_out = 4,
+        .bytes_affected = 1250,
+        .start_us = 0,
+        .end_us = 50
+    };
+    hooks.OnMempoolBatch(batch_ev);
+    
+    MempoolOrderingEvent ordering_ev{
+        .phase = MempoolOrderingPhase::TxGraphDoWork,
+        .candidate_count = 10,
+        .cluster_count = 3,
+        .work_budget = 1000,
+        .work_used = 500,
+        .start_us = 0,
+        .end_us = 25
+    };
+    hooks.OnMempoolOrdering(ordering_ev);
+    
+    MempoolLockContentionEvent lock_ev{
+        .lock_name = "mempool.cs",
+        .context = "atmp",
+        .wait_us = 100,
+        .hold_us = 500,
+        .timestamp_us = 0
+    };
+    hooks.OnMempoolLockContention(lock_ev);
+    
+    MempoolEvictionEvent eviction_ev{
+        .reason = MempoolEvictionReason::SizeLimit,
+        .tx_count = 10,
+        .bytes_removed = 2500,
+        .fees_removed_sat = 5000,
+        .timestamp_us = 0
+    };
+    hooks.OnMempoolEviction(eviction_ev);
+    
+    // If we get here without crash/exception, test passes
+    BOOST_CHECK(true);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_admission_attempt_event_fields)
+{
+    uint256 txid, wtxid;
+    txid.SetHex("abc123");
+    wtxid.SetHex("def456");
+    
+    MempoolAdmissionAttemptEvent ev{
+        .txid = txid,
+        .wtxid = wtxid,
+        .source = TxAdmissionSource::RPC,
+        .vsize = 250,
+        .fee_sat = 1000,
+        .timestamp_us = 1234567890
+    };
+    
+    BOOST_CHECK(ev.txid == txid);
+    BOOST_CHECK(ev.wtxid == wtxid);
+    BOOST_CHECK(ev.source == TxAdmissionSource::RPC);
+    BOOST_CHECK_EQUAL(ev.vsize, 250);
+    BOOST_CHECK_EQUAL(ev.fee_sat, 1000);
+    BOOST_CHECK_EQUAL(ev.timestamp_us, 1234567890);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_admission_result_event_fields)
+{
+    uint256 txid, wtxid;
+    txid.SetHex("abc123");
+    wtxid.SetHex("def456");
+    
+    MempoolAdmissionResultEvent ev{
+        .txid = txid,
+        .wtxid = wtxid,
+        .result = MempoolAdmissionResult::Rejected,
+        .reject_code = 64,
+        .reject_reason = "insufficient fee",
+        .replaced_count = 0,
+        .effective_feerate_sat_vb = 0,
+        .start_us = 1000,
+        .end_us = 1500
+    };
+    
+    BOOST_CHECK(ev.txid == txid);
+    BOOST_CHECK(ev.result == MempoolAdmissionResult::Rejected);
+    BOOST_CHECK_EQUAL(ev.reject_code, 64);
+    BOOST_CHECK_EQUAL(ev.reject_reason, "insufficient fee");
+    BOOST_CHECK_EQUAL(ev.end_us - ev.start_us, 500); // 500us processing time
+}
+
+BOOST_AUTO_TEST_CASE(package_admission_event_fields)
+{
+    uint256 pkg_hash;
+    pkg_hash.SetHex("fedcba987654321");
+    
+    PackageAdmissionEvent ev{
+        .package_hash = pkg_hash,
+        .strategy = PackageOrderingStrategy::ClusterAware,
+        .tx_count = 3,
+        .total_vsize = 750,
+        .total_fees_sat = 3000,
+        .accepted_count = 2,
+        .rejected_count = 1,
+        .start_us = 0,
+        .end_us = 1000
+    };
+    
+    BOOST_CHECK(ev.package_hash == pkg_hash);
+    BOOST_CHECK(ev.strategy == PackageOrderingStrategy::ClusterAware);
+    BOOST_CHECK_EQUAL(ev.tx_count, 3);
+    BOOST_CHECK_EQUAL(ev.accepted_count + ev.rejected_count, ev.tx_count);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_batch_event_fields)
+{
+    MempoolBatchEvent ev{
+        .batch_type = MempoolBatchType::Trim,
+        .tx_count_in = 100,
+        .tx_count_out = 90,
+        .bytes_affected = 25000,
+        .start_us = 0,
+        .end_us = 500
+    };
+    
+    BOOST_CHECK(ev.batch_type == MempoolBatchType::Trim);
+    BOOST_CHECK_EQUAL(ev.tx_count_in - ev.tx_count_out, 10); // 10 txs removed
+    BOOST_CHECK_EQUAL(ev.bytes_affected, 25000);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_eviction_event_fields)
+{
+    MempoolEvictionEvent ev{
+        .reason = MempoolEvictionReason::Expiry,
+        .tx_count = 5,
+        .bytes_removed = 1250,
+        .fees_removed_sat = 2500,
+        .timestamp_us = 1234567890
+    };
+    
+    BOOST_CHECK(ev.reason == MempoolEvictionReason::Expiry);
+    BOOST_CHECK_EQUAL(ev.tx_count, 5);
+    BOOST_CHECK_EQUAL(ev.bytes_removed, 1250);
+    BOOST_CHECK_EQUAL(ev.fees_removed_sat, 2500);
+}
+
+BOOST_AUTO_TEST_CASE(recording_hooks_capture_phase4_events)
+{
+    auto hooks = std::make_shared<RecordingStdioBusHooks>();
+    
+    // Fire Phase 4 events
+    MempoolAdmissionAttemptEvent attempt{
+        .txid = uint256::ONE,
+        .wtxid = uint256::ONE,
+        .source = TxAdmissionSource::P2P,
+        .vsize = 250,
+        .fee_sat = 1000,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    hooks->OnMempoolAdmissionAttempt(attempt);
+    
+    MempoolAdmissionResultEvent result{
+        .txid = uint256::ONE,
+        .wtxid = uint256::ONE,
+        .result = MempoolAdmissionResult::Accepted,
+        .reject_code = 0,
+        .reject_reason = {},
+        .replaced_count = 0,
+        .effective_feerate_sat_vb = 4000,
+        .start_us = 0,
+        .end_us = 100
+    };
+    hooks->OnMempoolAdmissionResult(result);
+    
+    MempoolEvictionEvent eviction{
+        .reason = MempoolEvictionReason::SizeLimit,
+        .tx_count = 3,
+        .bytes_removed = 750,
+        .fees_removed_sat = 1500,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    hooks->OnMempoolEviction(eviction);
+    
+    BOOST_CHECK_EQUAL(hooks->MempoolAdmissionAttemptsCount(), 1);
+    BOOST_CHECK_EQUAL(hooks->MempoolAdmissionResultsCount(), 1);
+    BOOST_CHECK_EQUAL(hooks->MempoolEvictionsCount(), 1);
+    
+    // Verify captured data
+    auto captured_attempt = hooks->GetMempoolAdmissionAttempt(0);
+    BOOST_CHECK(captured_attempt.txid == uint256::ONE);
+    BOOST_CHECK(captured_attempt.source == TxAdmissionSource::P2P);
+    
+    auto captured_result = hooks->GetMempoolAdmissionResult(0);
+    BOOST_CHECK(captured_result.result == MempoolAdmissionResult::Accepted);
+    
+    auto captured_eviction = hooks->GetMempoolEviction(0);
+    BOOST_CHECK(captured_eviction.reason == MempoolEvictionReason::SizeLimit);
+    BOOST_CHECK_EQUAL(captured_eviction.tx_count, 3);
+}
+
+BOOST_AUTO_TEST_CASE(tx_admission_source_enum_values)
+{
+    BOOST_CHECK(static_cast<uint8_t>(TxAdmissionSource::P2P) == 0);
+    BOOST_CHECK(static_cast<uint8_t>(TxAdmissionSource::RPC) == 1);
+    BOOST_CHECK(static_cast<uint8_t>(TxAdmissionSource::Reorg) == 2);
+    BOOST_CHECK(static_cast<uint8_t>(TxAdmissionSource::Package) == 3);
+    BOOST_CHECK(static_cast<uint8_t>(TxAdmissionSource::Wallet) == 4);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_eviction_reason_enum_values)
+{
+    BOOST_CHECK(static_cast<uint8_t>(MempoolEvictionReason::SizeLimit) == 0);
+    BOOST_CHECK(static_cast<uint8_t>(MempoolEvictionReason::Expiry) == 1);
+    BOOST_CHECK(static_cast<uint8_t>(MempoolEvictionReason::Reorg) == 2);
+    BOOST_CHECK(static_cast<uint8_t>(MempoolEvictionReason::Replaced) == 3);
+    BOOST_CHECK(static_cast<uint8_t>(MempoolEvictionReason::Conflict) == 4);
+    BOOST_CHECK(static_cast<uint8_t>(MempoolEvictionReason::BlockConfirm) == 5);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
