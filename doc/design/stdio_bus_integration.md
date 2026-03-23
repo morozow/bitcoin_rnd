@@ -302,6 +302,110 @@ The following were removed to minimize review surface:
 - `RpcMethodPriority` enum - Not needed for basic tracing
 - Placeholder timestamp fields - Only actual measured times
 
+## Phase 5b: Backpressure Policy (#18678) - REAL SOLUTION
+
+Phase 5 monitoring alone doesn't solve #18678. This section describes the actual
+backpressure policy that throttles low-priority P2P messages when RPC is overloaded.
+
+### Feature Flag
+
+```
+-experimental-rpc-priority    Enable RPC priority backpressure (default: false)
+```
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    HTTP Server                               │
+│  http_request_cb() → OnQueueDepthSample(depth, capacity)    │
+│  worker lambda    → OnQueueDepthSample(depth, capacity)     │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  RpcLoadMonitor                              │
+│  (src/node/rpc_load_monitor.h)                              │
+│                                                              │
+│  State machine with hysteresis:                             │
+│  NORMAL → ELEVATED (≥75%) → CRITICAL (≥90%)                 │
+│  CRITICAL → ELEVATED (<70%) → NORMAL (<50%)                 │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  ProcessMessages()                           │
+│  (src/net_processing.cpp)                                   │
+│                                                              │
+│  if (state != NORMAL && IsLowPriorityMessage(msg)) {        │
+│      node.RequeueMessageForProcessing(msg);                 │
+│      return true; // defer                                  │
+│  }                                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### RPC Load States
+
+| State | Queue Depth | Behavior |
+|-------|-------------|----------|
+| NORMAL | < 75% | Process all messages normally |
+| ELEVATED | ≥ 75% | Defer low-priority P2P messages |
+| CRITICAL | ≥ 90% | Defer low-priority, may drop tx announcements |
+
+### Hysteresis Thresholds
+
+To prevent state oscillation:
+
+| Transition | Threshold |
+|------------|-----------|
+| NORMAL → ELEVATED | ≥ 75% |
+| NORMAL → CRITICAL | ≥ 90% |
+| ELEVATED → CRITICAL | ≥ 90% |
+| ELEVATED → NORMAL | < 50% |
+| CRITICAL → ELEVATED | < 70% |
+
+### Message Priority Classification
+
+**Low-Priority (can be deferred):**
+- `TX` - Transaction relay
+- `INV` - Inventory announcements (tx)
+- `GETDATA` - Data requests (tx)
+- `MEMPOOL` - Mempool request
+- `ADDR`, `ADDRV2`, `GETADDR` - Address gossip
+
+**Critical (never throttled):**
+- `HEADERS`, `BLOCK`, `CMPCTBLOCK`, `BLOCKTXN` - Block propagation
+- `GETHEADERS`, `GETBLOCKS` - Block sync
+- `VERSION`, `VERACK`, `PING`, `PONG` - Connection management
+- `SENDCMPCT`, `SENDHEADERS`, `WTXIDRELAY` - Feature negotiation
+
+### Defer Mechanism
+
+When a low-priority message is deferred:
+1. Message is moved to back of peer's processing queue via `RequeueMessageForProcessing()`
+2. `ProcessMessages()` returns `true` (more work remains)
+3. Message will be processed when RPC load decreases
+
+### Files Modified
+
+- `src/node/rpc_load_monitor.h` - New: RpcLoadState enum, RpcLoadMonitor interface, AtomicRpcLoadMonitor
+- `src/net_processing.h` - Added `experimental_rpc_priority`, `rpc_load_monitor` to Options
+- `src/net_processing.cpp` - Added backpressure gate in ProcessMessages, IsLowPriorityMessage helper
+- `src/net.h` - Added `RequeueMessageForProcessing()` to CNode
+- `src/net.cpp` - Implemented `RequeueMessageForProcessing()`
+- `src/httpserver.h` - Added `SetHttpServerRpcLoadMonitor()`
+- `src/httpserver.cpp` - Added `OnQueueDepthSample()` calls at enqueue/dispatch
+- `src/node/peerman_args.cpp` - Parse `-experimental-rpc-priority`
+- `src/init.cpp` - Create RpcLoadMonitor, wire to HTTP and PeerManager
+
+### Consensus Safety
+
+This policy does NOT affect consensus:
+- Block-related messages are never throttled
+- Deferred messages are eventually processed (not dropped)
+- No changes to validation logic
+- Feature is opt-in (default off)
+
 ## Consensus Safety Invariants
 
 1. **No consensus decisions through stdio_bus** - All validation logic unchanged

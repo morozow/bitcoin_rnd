@@ -48,6 +48,7 @@
 #include <node/blockmanager_args.h>
 #include <node/blockstorage.h>
 #include <node/caches.h>
+#include <node/rpc_load_monitor.h>
 #include <node/chainstate.h>
 #include <node/chainstatemanager_args.h>
 #include <node/context.h>
@@ -669,6 +670,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-limitclustersize=<n>", strprintf("Do not accept transactions whose virtual size with all in-mempool connected transactions exceeds <n> kilobytes (default: %u)", DEFAULT_CLUSTER_SIZE_LIMIT_KVB), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-capturemessages", "Capture all P2P messages to disk", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-stdiobus=<mode>", "Enable stdio_bus integration for observability (off, shadow, active; default: off). Shadow mode observes without behavior change.", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-experimental-rpc-priority", "Enable experimental RPC priority backpressure policy (#18678). When RPC queue is overloaded, low-priority P2P messages are deferred. (default: false)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-mocktime=<n>", "Replace actual time with " + UNIX_EPOCH_TIME + " (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-maxsigcachesize=<n>", strprintf("Limit sum of signature cache and script execution cache sizes to <n> MiB (default: %u)", DEFAULT_VALIDATION_CACHE_BYTES >> 20), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-maxtipage=<n>",
@@ -1590,6 +1592,15 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     PeerManager::Options peerman_opts{};
     ApplyArgsManOptions(args, peerman_opts);
+
+    // Create RPC load monitor if experimental-rpc-priority is enabled (#18678)
+    std::shared_ptr<node::RpcLoadMonitor> rpc_load_monitor;
+    if (peerman_opts.experimental_rpc_priority) {
+        rpc_load_monitor = std::make_shared<node::AtomicRpcLoadMonitor>();
+        peerman_opts.rpc_load_monitor = rpc_load_monitor;
+        SetHttpServerRpcLoadMonitor(rpc_load_monitor);
+        LogInfo("RPC load monitor created for backpressure policy");
+    }
 
     {
         // Read asmap file if configured or embedded asmap data and initialize

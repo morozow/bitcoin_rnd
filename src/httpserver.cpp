@@ -12,6 +12,7 @@
 #include <netbase.h>
 #include <node/interface_ui.h>
 #include <node/stdio_bus_hooks.h>
+#include <node/rpc_load_monitor.h>
 #include <rpc/protocol.h>
 #include <sync.h>
 #include <util/check.h>
@@ -82,6 +83,9 @@ static int g_max_queue_depth{100};
 //! stdio_bus hooks for RPC monitoring (Phase 5)
 static std::shared_ptr<node::StdioBusHooks> g_stdio_bus_hooks;
 
+//! RPC load monitor for backpressure feedback (#18678)
+static std::shared_ptr<node::RpcLoadMonitor> g_rpc_load_monitor;
+
 /**
  * @brief Set stdio_bus hooks for HTTP server
  * Called from init.cpp when stdio_bus is enabled.
@@ -89,6 +93,15 @@ static std::shared_ptr<node::StdioBusHooks> g_stdio_bus_hooks;
 void SetHttpServerStdioBusHooks(std::shared_ptr<node::StdioBusHooks> hooks)
 {
     g_stdio_bus_hooks = std::move(hooks);
+}
+
+/**
+ * @brief Set RPC load monitor for backpressure feedback
+ * Called from init.cpp when -experimental-rpc-priority is enabled.
+ */
+void SetHttpServerRpcLoadMonitor(std::shared_ptr<node::RpcLoadMonitor> monitor)
+{
+    g_rpc_load_monitor = std::move(monitor);
 }
 
 /**
@@ -268,6 +281,11 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
         int current_queue_depth = static_cast<int>(g_threadpool_http.WorkQueueSize());
         int64_t request_id = node::GenerateRequestId();
         int64_t received_us = node::GetMonotonicTimeUs();
+
+        // Update RPC load monitor for backpressure feedback (#18678)
+        if (g_rpc_load_monitor) {
+            g_rpc_load_monitor->OnQueueDepthSample(current_queue_depth, g_max_queue_depth);
+        }
         
         if (current_queue_depth >= g_max_queue_depth) {
             LogWarning("Request rejected because http work queue depth exceeded, it can be increased with the -rpcworkqueue= setting");
@@ -310,6 +328,12 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
         
         auto item = [req = hreq, in_path = std::move(path), fn = i->handler, 
                      request_id, enqueued_us]() {
+            // Update RPC load monitor after dequeue (#18678)
+            if (g_rpc_load_monitor) {
+                const int q = static_cast<int>(g_threadpool_http.WorkQueueSize());
+                g_rpc_load_monitor->OnQueueDepthSample(q, g_max_queue_depth);
+            }
+
             // Phase 5: Fire dispatch event
             if (g_stdio_bus_hooks && g_stdio_bus_hooks->Enabled()) {
                 node::RpcHttpDispatchEvent ev;

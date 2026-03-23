@@ -16,6 +16,7 @@
 #include <util/expected.h>
 #include <validationinterface.h>
 #include <node/stdio_bus_hooks.h>
+#include <node/rpc_load_monitor.h>
 
 #include <atomic>
 #include <chrono>
@@ -98,6 +99,10 @@ public:
         node::StdioBusMode stdio_bus_mode{node::StdioBusMode::Off};
         //! stdio_bus hooks for observability (always valid, NoOp by default)
         std::shared_ptr<node::StdioBusHooks> stdio_bus_hooks{std::make_shared<node::NoOpStdioBusHooks>()};
+        //! Enable experimental RPC priority backpressure (#18678)
+        bool experimental_rpc_priority{false};
+        //! RPC load monitor for backpressure decisions (nullptr if disabled)
+        std::shared_ptr<node::RpcLoadMonitor> rpc_load_monitor{nullptr};
     };
 
     static std::unique_ptr<PeerManager> make(CConnman& connman, AddrMan& addrman,

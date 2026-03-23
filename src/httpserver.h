@@ -13,6 +13,7 @@
 
 namespace node {
 class StdioBusHooks;
+class RpcLoadMonitor;
 } // namespace node
 
 namespace util {
@@ -53,6 +54,9 @@ void StopHTTPServer();
 
 /** Set stdio_bus hooks for HTTP server (Phase 5: P2P/RPC degradation monitoring) */
 void SetHttpServerStdioBusHooks(std::shared_ptr<node::StdioBusHooks> hooks);
+
+/** Set RPC load monitor for backpressure feedback (#18678) */
+void SetHttpServerRpcLoadMonitor(std::shared_ptr<node::RpcLoadMonitor> monitor);
 
 /** Change logging level for libevent. */
 void UpdateHTTPServerLogging(bool enable);

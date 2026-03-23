@@ -45,6 +45,14 @@ void ApplyArgsManOptions(const ArgsManager& argsman, PeerManager::Options& optio
             LogError("Unknown -stdiobus mode: %s (valid: off, shadow, active)", mode_str);
         }
     }
+
+    // Parse -experimental-rpc-priority for backpressure policy (#18678)
+    if (auto value{argsman.GetBoolArg("-experimental-rpc-priority")}) {
+        options.experimental_rpc_priority = *value;
+        if (*value) {
+            LogInfo("Experimental RPC priority backpressure enabled (#18678)");
+        }
+    }
 }
 
 } // namespace node
