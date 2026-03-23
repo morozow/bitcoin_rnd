@@ -479,16 +479,9 @@ bool StdioBusSdkHooks::SendToSdk(const std::string& json)
 // Statistics
 // ============================================================================
 
-StdioBusStats StdioBusSdkHooks::GetStats() const
+StdioBusStatsSnapshot StdioBusSdkHooks::GetStats() const
 {
-    StdioBusStats stats;
-    stats.events_total.store(m_stats.events_total.load(std::memory_order_relaxed));
-    stats.events_dropped.store(m_stats.events_dropped.load(std::memory_order_relaxed));
-    stats.events_sent.store(m_stats.events_sent.load(std::memory_order_relaxed));
-    stats.errors.store(m_stats.errors.load(std::memory_order_relaxed));
-    stats.last_hook_latency_us.store(m_stats.last_hook_latency_us.load(std::memory_order_relaxed));
-    stats.queue_depth.store(m_stats.queue_depth.load(std::memory_order_relaxed));
-    return stats;
+    return m_stats.Snapshot();
 }
 
 void StdioBusSdkHooks::ResetStats()

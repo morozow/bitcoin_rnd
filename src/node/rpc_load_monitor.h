@@ -50,17 +50,20 @@ public:
  *   ELEVATED -> NORMAL: queue_depth < 50% capacity
  *   CRITICAL -> ELEVATED: queue_depth < 70% capacity
  */
+struct RpcLoadMonitorConfig {
+    double elevated_ratio = 0.75;   //!< Enter ELEVATED when >= this ratio
+    double critical_ratio = 0.90;   //!< Enter CRITICAL when >= this ratio
+    double leave_elevated = 0.50;   //!< Leave ELEVATED -> NORMAL when < this ratio
+    double leave_critical = 0.70;   //!< Leave CRITICAL -> ELEVATED when < this ratio
+};
+
 class AtomicRpcLoadMonitor final : public RpcLoadMonitor
 {
 public:
-    struct Config {
-        double elevated_ratio{0.75};   //!< Enter ELEVATED when >= this ratio
-        double critical_ratio{0.90};   //!< Enter CRITICAL when >= this ratio
-        double leave_elevated{0.50};   //!< Leave ELEVATED -> NORMAL when < this ratio
-        double leave_critical{0.70};   //!< Leave CRITICAL -> ELEVATED when < this ratio
-    };
+    using Config = RpcLoadMonitorConfig;
 
-    explicit AtomicRpcLoadMonitor(Config cfg = {}) : m_cfg(cfg) {}
+    AtomicRpcLoadMonitor() : m_cfg{} {}
+    explicit AtomicRpcLoadMonitor(Config cfg) : m_cfg(cfg) {}
 
     RpcLoadState GetState() const override
     {

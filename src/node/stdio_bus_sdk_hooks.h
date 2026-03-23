@@ -19,7 +19,19 @@
 namespace node {
 
 /**
- * @brief Statistics for StdioBusSdkHooks
+ * @brief Statistics snapshot for StdioBusSdkHooks (copyable)
+ */
+struct StdioBusStatsSnapshot {
+    uint64_t events_total{0};
+    uint64_t events_dropped{0};
+    uint64_t events_sent{0};
+    uint64_t errors{0};
+    int64_t last_hook_latency_us{0};
+    size_t queue_depth{0};
+};
+
+/**
+ * @brief Statistics for StdioBusSdkHooks (internal, non-copyable)
  */
 struct StdioBusStats {
     std::atomic<uint64_t> events_total{0};
@@ -28,6 +40,17 @@ struct StdioBusStats {
     std::atomic<uint64_t> errors{0};
     std::atomic<int64_t> last_hook_latency_us{0};
     std::atomic<size_t> queue_depth{0};
+    
+    StdioBusStatsSnapshot Snapshot() const {
+        return StdioBusStatsSnapshot{
+            events_total.load(std::memory_order_relaxed),
+            events_dropped.load(std::memory_order_relaxed),
+            events_sent.load(std::memory_order_relaxed),
+            errors.load(std::memory_order_relaxed),
+            last_hook_latency_us.load(std::memory_order_relaxed),
+            queue_depth.load(std::memory_order_relaxed)
+        };
+    }
 };
 
 /**
@@ -92,7 +115,7 @@ public:
     // ========== Statistics ==========
 
     /** Get current statistics (thread-safe snapshot) */
-    StdioBusStats GetStats() const;
+    StdioBusStatsSnapshot GetStats() const;
 
     /** Reset statistics counters */
     void ResetStats();

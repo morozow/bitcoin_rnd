@@ -6,6 +6,7 @@
 
 #include <chain.h>
 #include <consensus/validation.h>
+#include <kernel/mempool_entry.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <logging.h>
@@ -78,9 +79,9 @@ void StdioBusValidationObserver::TransactionAddedToMempool(
     const CTransactionRef& tx = tx_info.info.m_tx;
 
     TxAdmissionEvent ev{
-        .txid = tx->GetHash(),
-        .wtxid = tx->GetWitnessHash(),
-        .size_bytes = tx->GetTotalSize(),
+        .txid = uint256{tx->GetHash().ToUint256()},
+        .wtxid = uint256{tx->GetWitnessHash().ToUint256()},
+        .size_bytes = static_cast<size_t>(tx_info.info.m_virtual_transaction_size),
         .received_us = processed_us, // Approximate - actual receive time not available here
         .processed_us = processed_us,
         .accepted = true,
