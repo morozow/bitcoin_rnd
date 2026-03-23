@@ -66,7 +66,7 @@ def percentile(values: List[float], p: float) -> float:
 class LowPriorityInvFloodPeer(P2PInterface):
     def send_inv_batch(self, rng: random.Random, entries: int) -> None:
         invs = [CInv(MSG_TX, rng.getrandbits(256)) for _ in range(entries)]
-        self.send_message(msg_inv(invs))
+        self.send_without_ping(msg_inv(invs))
 
 
 class RpcP2PBackpressureABTest(BitcoinTestFramework):
@@ -190,6 +190,7 @@ class RpcP2PBackpressureABTest(BitcoinTestFramework):
         # Main thread runs P2P flood
         p2p_inv_msgs_sent = 0
         p2p_inv_entries_sent = 0
+        p2p_errors = 0
         flood_rng = random.Random(42)
 
         start = time.time()
@@ -200,9 +201,15 @@ class RpcP2PBackpressureABTest(BitcoinTestFramework):
                     peer.send_inv_batch(flood_rng, self.inv_entries_per_msg)
                     p2p_inv_msgs_sent += 1
                     p2p_inv_entries_sent += self.inv_entries_per_msg
-                except Exception:
-                    break
+                except Exception as e:
+                    p2p_errors += 1
+                    # Don't break - continue trying to send
+                    if p2p_errors == 1:
+                        self.log.warning(f"P2P send error (first): {e}")
             time.sleep(self.tick_sleep_s)
+        
+        if p2p_inv_msgs_sent == 0:
+            self.log.warning(f"No P2P INV messages sent! Errors: {p2p_errors}")
 
         stop_event.set()
         for t in threads:
