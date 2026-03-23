@@ -89,6 +89,107 @@ struct RpcCallEvent {
     bool success;
 };
 
+// ============================================================================
+// Phase 2: Block Processing Delay Diagnostic Events (#21803)
+// ============================================================================
+
+/** Block announcement source */
+enum class BlockAnnounceVia {
+    Headers = 0,
+    CompactBlock = 1,
+    Inv = 2
+};
+
+/** Block announce event - when we learn about a new block */
+struct BlockAnnounceEvent {
+    uint256 hash;
+    int64_t peer_id;
+    BlockAnnounceVia via;
+    int64_t chainwork_delta;  // Relative to our tip
+    int height;
+    int64_t timestamp_us;
+};
+
+/** Block request decision reason */
+enum class BlockRequestReason {
+    NewBlock = 0,           // First request for this block
+    Retry = 1,              // Retry after timeout
+    Hedge = 2,              // Hedging request to additional peer
+    CompactFallback = 3,    // Fallback from compact block
+    ParallelDownload = 4    // Parallel download slot
+};
+
+/** Block request decision event - when we decide to request a block */
+struct BlockRequestDecisionEvent {
+    uint256 hash;
+    int64_t peer_id;
+    BlockRequestReason reason;
+    bool is_preferred_peer;
+    bool first_in_flight;
+    size_t already_in_flight;
+    bool can_direct_fetch;
+    bool is_limited_peer;
+    int64_t timestamp_us;
+};
+
+/** Block in-flight change action */
+enum class InFlightAction {
+    Add = 0,
+    Remove = 1,
+    Timeout = 2
+};
+
+/** Block in-flight state change event */
+struct BlockInFlightEvent {
+    uint256 hash;
+    int64_t peer_id;
+    InFlightAction action;
+    size_t inflight_count;      // Total in-flight for this block
+    size_t peer_inflight_count; // In-flight for this peer
+    int64_t timestamp_us;
+};
+
+/** Staller detected event - when download window is blocked */
+struct StallerDetectedEvent {
+    uint256 hash;
+    int64_t staller_peer_id;
+    int64_t waiting_peer_id;
+    int window_end_height;
+    int64_t stall_duration_us;
+    int64_t timestamp_us;
+};
+
+/** Compact block decision action */
+enum class CompactBlockAction {
+    Reconstruct = 0,    // Successfully reconstructed from mempool
+    GetBlockTxn = 1,    // Requesting missing transactions
+    GetData = 2,        // Falling back to full block
+    Wait = 3,           // Waiting for other peer
+    Drop = 4            // Dropping (already have or invalid)
+};
+
+/** Compact block decision event */
+struct CompactBlockDecisionEvent {
+    uint256 hash;
+    int64_t peer_id;
+    CompactBlockAction action;
+    size_t missing_tx_count;    // Transactions not in mempool
+    bool first_in_flight;
+    bool is_highbandwidth;
+    int64_t timestamp_us;
+};
+
+/** Block source resolved event - when we finally get the block */
+struct BlockSourceResolvedEvent {
+    uint256 hash;
+    int64_t source_peer_id;     // Peer that provided the block
+    int64_t first_requested_peer_id;  // First peer we requested from
+    int64_t announce_to_receive_us;   // Time from first announce to receive
+    int64_t request_to_receive_us;    // Time from first request to receive
+    size_t total_requests;      // Total requests made for this block
+    int64_t timestamp_us;
+};
+
 /**
  * @brief stdio_bus mode enum
  */
@@ -173,6 +274,26 @@ public:
 
     /** Called after RPC call completes */
     virtual void OnRpcCall(const RpcCallEvent& event) = 0;
+
+    // ========== Phase 2: Block Processing Delay Events (#21803) ==========
+
+    /** Called when a new block is announced */
+    virtual void OnBlockAnnounce(const BlockAnnounceEvent& event) = 0;
+
+    /** Called when a block request decision is made */
+    virtual void OnBlockRequestDecision(const BlockRequestDecisionEvent& event) = 0;
+
+    /** Called when block in-flight state changes */
+    virtual void OnBlockInFlight(const BlockInFlightEvent& event) = 0;
+
+    /** Called when a staller is detected in download window */
+    virtual void OnStallerDetected(const StallerDetectedEvent& event) = 0;
+
+    /** Called when compact block processing decision is made */
+    virtual void OnCompactBlockDecision(const CompactBlockDecisionEvent& event) = 0;
+
+    /** Called when block source is resolved (block received) */
+    virtual void OnBlockSourceResolved(const BlockSourceResolvedEvent& event) = 0;
 };
 
 /**
@@ -192,6 +313,14 @@ public:
     void OnTxAdmission(const TxAdmissionEvent&) override {}
     void OnMsgHandlerLoop(const MsgHandlerLoopEvent&) override {}
     void OnRpcCall(const RpcCallEvent&) override {}
+    
+    // Phase 2: Block Processing Delay Events
+    void OnBlockAnnounce(const BlockAnnounceEvent&) override {}
+    void OnBlockRequestDecision(const BlockRequestDecisionEvent&) override {}
+    void OnBlockInFlight(const BlockInFlightEvent&) override {}
+    void OnStallerDetected(const StallerDetectedEvent&) override {}
+    void OnCompactBlockDecision(const CompactBlockDecisionEvent&) override {}
+    void OnBlockSourceResolved(const BlockSourceResolvedEvent&) override {}
 };
 
 /**

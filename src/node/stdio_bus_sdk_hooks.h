@@ -73,6 +73,14 @@ public:
     void OnMsgHandlerLoop(const MsgHandlerLoopEvent& ev) override;
     void OnRpcCall(const RpcCallEvent& ev) override;
 
+    // Phase 2: Block Processing Delay Events
+    void OnBlockAnnounce(const BlockAnnounceEvent& ev) override;
+    void OnBlockRequestDecision(const BlockRequestDecisionEvent& ev) override;
+    void OnBlockInFlight(const BlockInFlightEvent& ev) override;
+    void OnStallerDetected(const StallerDetectedEvent& ev) override;
+    void OnCompactBlockDecision(const CompactBlockDecisionEvent& ev) override;
+    void OnBlockSourceResolved(const BlockSourceResolvedEvent& ev) override;
+
     // ========== Lifecycle ==========
 
     /** Start the background worker and SDK connection */
@@ -101,7 +109,14 @@ private:
         BlockValidatedEvent,
         TxAdmissionEvent,
         MsgHandlerLoopEvent,
-        RpcCallEvent
+        RpcCallEvent,
+        // Phase 2 events
+        BlockAnnounceEvent,
+        BlockRequestDecisionEvent,
+        BlockInFlightEvent,
+        StallerDetectedEvent,
+        CompactBlockDecisionEvent,
+        BlockSourceResolvedEvent
     >;
 
     /** Try to enqueue an event (non-blocking) */

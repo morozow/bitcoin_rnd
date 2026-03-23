@@ -145,16 +145,50 @@ public:
         m_rpc_calls.push_back(ev);
     }
     
+    // Phase 2: Block Processing Delay Events
+    void OnBlockAnnounce(const BlockAnnounceEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_block_announces.push_back(ev);
+    }
+    
+    void OnBlockRequestDecision(const BlockRequestDecisionEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_block_request_decisions.push_back(ev);
+    }
+    
+    void OnBlockInFlight(const BlockInFlightEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_block_in_flights.push_back(ev);
+    }
+    
+    void OnStallerDetected(const StallerDetectedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_staller_events.push_back(ev);
+    }
+    
+    void OnCompactBlockDecision(const CompactBlockDecisionEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_compact_block_decisions.push_back(ev);
+    }
+    
+    void OnBlockSourceResolved(const BlockSourceResolvedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_block_source_resolved.push_back(ev);
+    }
+    
     // Accessors
     size_t MessageCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_messages.size(); }
     size_t HeadersCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_headers.size(); }
     size_t BlocksReceivedCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_blocks_received.size(); }
     size_t BlocksValidatedCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_blocks_validated.size(); }
     size_t TxAdmissionsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_tx_admissions.size(); }
+    size_t BlockAnnouncesCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_block_announces.size(); }
+    size_t StallerEventsCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_staller_events.size(); }
     
     MessageEvent GetMessage(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_messages.at(i); }
     HeadersEvent GetHeaders(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_headers.at(i); }
     BlockValidatedEvent GetBlockValidated(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_blocks_validated.at(i); }
+    BlockAnnounceEvent GetBlockAnnounce(size_t i) const { std::lock_guard<std::mutex> lock(m_mutex); return m_block_announces.at(i); }
     
     bool m_enabled{true};
     
@@ -167,6 +201,13 @@ private:
     std::vector<TxAdmissionEvent> m_tx_admissions;
     std::vector<MsgHandlerLoopEvent> m_loop_events;
     std::vector<RpcCallEvent> m_rpc_calls;
+    // Phase 2
+    std::vector<BlockAnnounceEvent> m_block_announces;
+    std::vector<BlockRequestDecisionEvent> m_block_request_decisions;
+    std::vector<BlockInFlightEvent> m_block_in_flights;
+    std::vector<StallerDetectedEvent> m_staller_events;
+    std::vector<CompactBlockDecisionEvent> m_compact_block_decisions;
+    std::vector<BlockSourceResolvedEvent> m_block_source_resolved;
 };
 
 BOOST_AUTO_TEST_CASE(recording_hooks_capture_events)
@@ -393,6 +434,334 @@ BOOST_AUTO_TEST_CASE(latency_measurement)
     BOOST_CHECK(latency_us >= 1000);
     // Should be less than 100ms (sanity check)
     BOOST_CHECK(latency_us < 100000);
+}
+
+// ============================================================================
+// Phase 2: Block Processing Delay Events Tests (#21803)
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(block_announce_event_fields)
+{
+    uint256 hash;
+    hash.SetHex("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
+    
+    BlockAnnounceEvent ev{
+        .hash = hash,
+        .peer_id = 42,
+        .via = BlockAnnounceVia::Headers,
+        .chainwork_delta = 12345678,
+        .height = 800000,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.peer_id, 42);
+    BOOST_CHECK(ev.via == BlockAnnounceVia::Headers);
+    BOOST_CHECK_EQUAL(ev.chainwork_delta, 12345678);
+    BOOST_CHECK_EQUAL(ev.height, 800000);
+}
+
+BOOST_AUTO_TEST_CASE(block_announce_via_enum)
+{
+    BOOST_CHECK(static_cast<int>(BlockAnnounceVia::Headers) == 0);
+    BOOST_CHECK(static_cast<int>(BlockAnnounceVia::CompactBlock) == 1);
+    BOOST_CHECK(static_cast<int>(BlockAnnounceVia::Inv) == 2);
+}
+
+BOOST_AUTO_TEST_CASE(block_request_decision_event_fields)
+{
+    uint256 hash;
+    hash.SetHex("abc123");
+    
+    BlockRequestDecisionEvent ev{
+        .hash = hash,
+        .peer_id = 10,
+        .reason = BlockRequestReason::NewBlock,
+        .is_preferred_peer = true,
+        .first_in_flight = true,
+        .already_in_flight = 0,
+        .can_direct_fetch = true,
+        .is_limited_peer = false,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.peer_id, 10);
+    BOOST_CHECK(ev.reason == BlockRequestReason::NewBlock);
+    BOOST_CHECK(ev.is_preferred_peer);
+    BOOST_CHECK(ev.first_in_flight);
+    BOOST_CHECK_EQUAL(ev.already_in_flight, 0);
+}
+
+BOOST_AUTO_TEST_CASE(block_in_flight_event_fields)
+{
+    uint256 hash;
+    hash.SetHex("def456");
+    
+    BlockInFlightEvent ev{
+        .hash = hash,
+        .peer_id = 5,
+        .action = InFlightAction::Add,
+        .inflight_count = 1,
+        .peer_inflight_count = 3,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.peer_id, 5);
+    BOOST_CHECK(ev.action == InFlightAction::Add);
+    BOOST_CHECK_EQUAL(ev.inflight_count, 1);
+    BOOST_CHECK_EQUAL(ev.peer_inflight_count, 3);
+}
+
+BOOST_AUTO_TEST_CASE(staller_detected_event_fields)
+{
+    uint256 hash;
+    hash.SetHex("789abc");
+    
+    StallerDetectedEvent ev{
+        .hash = hash,
+        .staller_peer_id = 3,
+        .waiting_peer_id = 7,
+        .window_end_height = 800010,
+        .stall_duration_us = 5000000, // 5 seconds
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.staller_peer_id, 3);
+    BOOST_CHECK_EQUAL(ev.waiting_peer_id, 7);
+    BOOST_CHECK_EQUAL(ev.window_end_height, 800010);
+    BOOST_CHECK_EQUAL(ev.stall_duration_us, 5000000);
+}
+
+BOOST_AUTO_TEST_CASE(compact_block_decision_event_fields)
+{
+    uint256 hash;
+    hash.SetHex("compact123");
+    
+    CompactBlockDecisionEvent ev{
+        .hash = hash,
+        .peer_id = 15,
+        .action = CompactBlockAction::GetBlockTxn,
+        .missing_tx_count = 5,
+        .first_in_flight = true,
+        .is_highbandwidth = true,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.peer_id, 15);
+    BOOST_CHECK(ev.action == CompactBlockAction::GetBlockTxn);
+    BOOST_CHECK_EQUAL(ev.missing_tx_count, 5);
+    BOOST_CHECK(ev.first_in_flight);
+    BOOST_CHECK(ev.is_highbandwidth);
+}
+
+BOOST_AUTO_TEST_CASE(block_source_resolved_event_fields)
+{
+    uint256 hash;
+    hash.SetHex("resolved789");
+    
+    BlockSourceResolvedEvent ev{
+        .hash = hash,
+        .source_peer_id = 20,
+        .first_requested_peer_id = 15,
+        .announce_to_receive_us = 2500000, // 2.5 seconds
+        .request_to_receive_us = 1500000,  // 1.5 seconds
+        .total_requests = 3,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.source_peer_id, 20);
+    BOOST_CHECK_EQUAL(ev.first_requested_peer_id, 15);
+    BOOST_CHECK_EQUAL(ev.announce_to_receive_us, 2500000);
+    BOOST_CHECK_EQUAL(ev.request_to_receive_us, 1500000);
+    BOOST_CHECK_EQUAL(ev.total_requests, 3);
+}
+
+BOOST_AUTO_TEST_CASE(recording_hooks_capture_phase2_events)
+{
+    auto hooks = std::make_shared<RecordingStdioBusHooks>();
+    
+    // Fire Phase 2 events
+    BlockAnnounceEvent announce_ev{
+        .hash = uint256::ONE,
+        .peer_id = 1,
+        .via = BlockAnnounceVia::CompactBlock,
+        .chainwork_delta = 1000,
+        .height = 100,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    hooks->OnBlockAnnounce(announce_ev);
+    
+    StallerDetectedEvent staller_ev{
+        .hash = uint256::ONE,
+        .staller_peer_id = 2,
+        .waiting_peer_id = 1,
+        .window_end_height = 110,
+        .stall_duration_us = 0,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    hooks->OnStallerDetected(staller_ev);
+    
+    BOOST_CHECK_EQUAL(hooks->BlockAnnouncesCount(), 1);
+    BOOST_CHECK_EQUAL(hooks->StallerEventsCount(), 1);
+    
+    auto captured_announce = hooks->GetBlockAnnounce(0);
+    BOOST_CHECK(captured_announce.hash == uint256::ONE);
+    BOOST_CHECK(captured_announce.via == BlockAnnounceVia::CompactBlock);
+}
+
+BOOST_AUTO_TEST_CASE(noop_hooks_phase2_safe_to_call)
+{
+    NoOpStdioBusHooks hooks;
+    
+    // All Phase 2 hook calls should be safe no-ops
+    BlockAnnounceEvent announce_ev{.hash = uint256::ZERO, .peer_id = 1, .via = BlockAnnounceVia::Headers, .chainwork_delta = 0, .height = 0, .timestamp_us = 0};
+    hooks.OnBlockAnnounce(announce_ev);
+    
+    BlockRequestDecisionEvent request_ev{.hash = uint256::ZERO, .peer_id = 1, .reason = BlockRequestReason::NewBlock, .is_preferred_peer = false, .first_in_flight = true, .already_in_flight = 0, .can_direct_fetch = true, .is_limited_peer = false, .timestamp_us = 0};
+    hooks.OnBlockRequestDecision(request_ev);
+    
+    BlockInFlightEvent inflight_ev{.hash = uint256::ZERO, .peer_id = 1, .action = InFlightAction::Add, .inflight_count = 1, .peer_inflight_count = 1, .timestamp_us = 0};
+    hooks.OnBlockInFlight(inflight_ev);
+    
+    StallerDetectedEvent staller_ev{.hash = uint256::ZERO, .staller_peer_id = 1, .waiting_peer_id = 2, .window_end_height = 100, .stall_duration_us = 0, .timestamp_us = 0};
+    hooks.OnStallerDetected(staller_ev);
+    
+    CompactBlockDecisionEvent compact_ev{.hash = uint256::ZERO, .peer_id = 1, .action = CompactBlockAction::Reconstruct, .missing_tx_count = 0, .first_in_flight = true, .is_highbandwidth = false, .timestamp_us = 0};
+    hooks.OnCompactBlockDecision(compact_ev);
+    
+    BlockSourceResolvedEvent resolved_ev{.hash = uint256::ZERO, .source_peer_id = 1, .first_requested_peer_id = 1, .announce_to_receive_us = 1000, .request_to_receive_us = 500, .total_requests = 1, .timestamp_us = 0};
+    hooks.OnBlockSourceResolved(resolved_ev);
+    
+    // If we get here without crash/exception, test passes
+    BOOST_CHECK(true);
+}
+
+// ============================================================================
+// Phase 2: SendMessages hook tests
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(block_request_reason_enum)
+{
+    BOOST_CHECK(static_cast<int>(BlockRequestReason::NewBlock) == 0);
+    BOOST_CHECK(static_cast<int>(BlockRequestReason::Retry) == 1);
+    BOOST_CHECK(static_cast<int>(BlockRequestReason::Hedge) == 2);
+    BOOST_CHECK(static_cast<int>(BlockRequestReason::CompactFallback) == 3);
+    BOOST_CHECK(static_cast<int>(BlockRequestReason::ParallelDownload) == 4);
+}
+
+BOOST_AUTO_TEST_CASE(inflight_action_enum)
+{
+    BOOST_CHECK(static_cast<int>(InFlightAction::Add) == 0);
+    BOOST_CHECK(static_cast<int>(InFlightAction::Remove) == 1);
+    BOOST_CHECK(static_cast<int>(InFlightAction::Timeout) == 2);
+}
+
+BOOST_AUTO_TEST_CASE(compact_block_action_enum)
+{
+    BOOST_CHECK(static_cast<int>(CompactBlockAction::Reconstruct) == 0);
+    BOOST_CHECK(static_cast<int>(CompactBlockAction::GetBlockTxn) == 1);
+    BOOST_CHECK(static_cast<int>(CompactBlockAction::GetData) == 2);
+    BOOST_CHECK(static_cast<int>(CompactBlockAction::Wait) == 3);
+    BOOST_CHECK(static_cast<int>(CompactBlockAction::Drop) == 4);
+}
+
+BOOST_AUTO_TEST_CASE(block_request_decision_parallel_download)
+{
+    // Test BlockRequestDecisionEvent with ParallelDownload reason (used in SendMessages)
+    uint256 hash;
+    hash.SetHex("sendmsg123");
+    
+    BlockRequestDecisionEvent ev{
+        .hash = hash,
+        .peer_id = 25,
+        .reason = BlockRequestReason::ParallelDownload,
+        .is_preferred_peer = true,
+        .first_in_flight = false,
+        .already_in_flight = 2,
+        .can_direct_fetch = true,
+        .is_limited_peer = false,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.peer_id, 25);
+    BOOST_CHECK(ev.reason == BlockRequestReason::ParallelDownload);
+    BOOST_CHECK(ev.is_preferred_peer);
+    BOOST_CHECK(!ev.first_in_flight);
+    BOOST_CHECK_EQUAL(ev.already_in_flight, 2);
+    BOOST_CHECK(ev.can_direct_fetch);
+    BOOST_CHECK(!ev.is_limited_peer);
+}
+
+BOOST_AUTO_TEST_CASE(block_inflight_timeout_event)
+{
+    // Test BlockInFlightEvent with Timeout action (used in SendMessages timeout branch)
+    uint256 hash;
+    hash.SetHex("timeout456");
+    
+    BlockInFlightEvent ev{
+        .hash = hash,
+        .peer_id = 30,
+        .action = InFlightAction::Timeout,
+        .inflight_count = 1,
+        .peer_inflight_count = 5,
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.peer_id, 30);
+    BOOST_CHECK(ev.action == InFlightAction::Timeout);
+    BOOST_CHECK_EQUAL(ev.inflight_count, 1);
+    BOOST_CHECK_EQUAL(ev.peer_inflight_count, 5);
+}
+
+BOOST_AUTO_TEST_CASE(staller_detected_timeout_disconnect)
+{
+    // Test StallerDetectedEvent for timeout disconnect (used in SendMessages stall timeout)
+    uint256 hash;
+    hash.SetHex("stalltimeout789");
+    
+    StallerDetectedEvent ev{
+        .hash = hash,
+        .staller_peer_id = 35,
+        .waiting_peer_id = -1, // We are the staller being disconnected
+        .window_end_height = 800050,
+        .stall_duration_us = 10000000, // 10 seconds stall
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.staller_peer_id, 35);
+    BOOST_CHECK_EQUAL(ev.waiting_peer_id, -1);
+    BOOST_CHECK_EQUAL(ev.window_end_height, 800050);
+    BOOST_CHECK_EQUAL(ev.stall_duration_us, 10000000);
+}
+
+BOOST_AUTO_TEST_CASE(staller_detected_stall_started)
+{
+    // Test StallerDetectedEvent for stall started (used in SendMessages stall start)
+    uint256 hash;
+    hash.SetHex("stallstart123");
+    
+    StallerDetectedEvent ev{
+        .hash = hash,
+        .staller_peer_id = 40,
+        .waiting_peer_id = 45, // Peer waiting for staller
+        .window_end_height = 800060,
+        .stall_duration_us = 0, // Just started
+        .timestamp_us = GetMonotonicTimeUs()
+    };
+    
+    BOOST_CHECK(ev.hash == hash);
+    BOOST_CHECK_EQUAL(ev.staller_peer_id, 40);
+    BOOST_CHECK_EQUAL(ev.waiting_peer_id, 45);
+    BOOST_CHECK_EQUAL(ev.window_end_height, 800060);
+    BOOST_CHECK_EQUAL(ev.stall_duration_us, 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

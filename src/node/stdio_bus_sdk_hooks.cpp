@@ -233,6 +233,100 @@ void StdioBusSdkHooks::OnRpcCall(const RpcCallEvent& ev)
 }
 
 // ============================================================================
+// Phase 2: Block Processing Delay Events (#21803)
+// ============================================================================
+
+void StdioBusSdkHooks::OnBlockAnnounce(const BlockAnnounceEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnBlockRequestDecision(const BlockRequestDecisionEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnBlockInFlight(const BlockInFlightEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnStallerDetected(const StallerDetectedEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnCompactBlockDecision(const CompactBlockDecisionEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StdioBusSdkHooks::OnBlockSourceResolved(const BlockSourceResolvedEvent& ev)
+{
+    if (!Enabled()) return;
+    
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) {
+        m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ============================================================================
 // Queue Operations
 // ============================================================================
 
@@ -380,6 +474,94 @@ std::string StdioBusSdkHooks::SerializeEvent(const Event& ev) const
                << "\"start_us\":" << arg.start_us << ","
                << "\"end_us\":" << arg.end_us << ","
                << "\"success\":" << (arg.success ? "true" : "false");
+        }
+        // Phase 2: Block Processing Delay Events
+        else if constexpr (std::is_same_v<T, BlockAnnounceEvent>) {
+            const char* via_str = "unknown";
+            switch (arg.via) {
+                case BlockAnnounceVia::Headers: via_str = "headers"; break;
+                case BlockAnnounceVia::CompactBlock: via_str = "compact_block"; break;
+                case BlockAnnounceVia::Inv: via_str = "inv"; break;
+            }
+            ss << "\"type\":\"block_announce\","
+               << "\"hash\":\"" << arg.hash.GetHex() << "\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"via\":\"" << via_str << "\","
+               << "\"chainwork_delta\":" << arg.chainwork_delta << ","
+               << "\"height\":" << arg.height << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, BlockRequestDecisionEvent>) {
+            const char* reason_str = "unknown";
+            switch (arg.reason) {
+                case BlockRequestReason::NewBlock: reason_str = "new_block"; break;
+                case BlockRequestReason::Retry: reason_str = "retry"; break;
+                case BlockRequestReason::Hedge: reason_str = "hedge"; break;
+                case BlockRequestReason::CompactFallback: reason_str = "compact_fallback"; break;
+                case BlockRequestReason::ParallelDownload: reason_str = "parallel_download"; break;
+            }
+            ss << "\"type\":\"block_request_decision\","
+               << "\"hash\":\"" << arg.hash.GetHex() << "\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"reason\":\"" << reason_str << "\","
+               << "\"is_preferred_peer\":" << (arg.is_preferred_peer ? "true" : "false") << ","
+               << "\"first_in_flight\":" << (arg.first_in_flight ? "true" : "false") << ","
+               << "\"already_in_flight\":" << arg.already_in_flight << ","
+               << "\"can_direct_fetch\":" << (arg.can_direct_fetch ? "true" : "false") << ","
+               << "\"is_limited_peer\":" << (arg.is_limited_peer ? "true" : "false") << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, BlockInFlightEvent>) {
+            const char* action_str = "unknown";
+            switch (arg.action) {
+                case InFlightAction::Add: action_str = "add"; break;
+                case InFlightAction::Remove: action_str = "remove"; break;
+                case InFlightAction::Timeout: action_str = "timeout"; break;
+            }
+            ss << "\"type\":\"block_in_flight\","
+               << "\"hash\":\"" << arg.hash.GetHex() << "\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"action\":\"" << action_str << "\","
+               << "\"inflight_count\":" << arg.inflight_count << ","
+               << "\"peer_inflight_count\":" << arg.peer_inflight_count << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, StallerDetectedEvent>) {
+            ss << "\"type\":\"staller_detected\","
+               << "\"hash\":\"" << arg.hash.GetHex() << "\","
+               << "\"staller_peer_id\":" << arg.staller_peer_id << ","
+               << "\"waiting_peer_id\":" << arg.waiting_peer_id << ","
+               << "\"window_end_height\":" << arg.window_end_height << ","
+               << "\"stall_duration_us\":" << arg.stall_duration_us << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, CompactBlockDecisionEvent>) {
+            const char* action_str = "unknown";
+            switch (arg.action) {
+                case CompactBlockAction::Reconstruct: action_str = "reconstruct"; break;
+                case CompactBlockAction::GetBlockTxn: action_str = "get_block_txn"; break;
+                case CompactBlockAction::GetData: action_str = "get_data"; break;
+                case CompactBlockAction::Wait: action_str = "wait"; break;
+                case CompactBlockAction::Drop: action_str = "drop"; break;
+            }
+            ss << "\"type\":\"compact_block_decision\","
+               << "\"hash\":\"" << arg.hash.GetHex() << "\","
+               << "\"peer_id\":" << arg.peer_id << ","
+               << "\"action\":\"" << action_str << "\","
+               << "\"missing_tx_count\":" << arg.missing_tx_count << ","
+               << "\"first_in_flight\":" << (arg.first_in_flight ? "true" : "false") << ","
+               << "\"is_highbandwidth\":" << (arg.is_highbandwidth ? "true" : "false") << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, BlockSourceResolvedEvent>) {
+            ss << "\"type\":\"block_source_resolved\","
+               << "\"hash\":\"" << arg.hash.GetHex() << "\","
+               << "\"source_peer_id\":" << arg.source_peer_id << ","
+               << "\"first_requested_peer_id\":" << arg.first_requested_peer_id << ","
+               << "\"announce_to_receive_us\":" << arg.announce_to_receive_us << ","
+               << "\"request_to_receive_us\":" << arg.request_to_receive_us << ","
+               << "\"total_requests\":" << arg.total_requests << ","
+               << "\"timestamp_us\":" << arg.timestamp_us;
         }
     }, ev);
     
