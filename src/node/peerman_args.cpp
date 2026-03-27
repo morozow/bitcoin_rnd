@@ -25,6 +25,42 @@ void ApplyArgsManOptions(const ArgsManager& argsman, PeerManager::Options& optio
     if (auto value{argsman.GetBoolArg("-blocksonly")}) options.ignore_incoming_txs = *value;
 
     if (auto value{argsman.GetBoolArg("-privatebroadcast")}) options.private_broadcast = *value;
+
+    // Parse -stdiobus mode
+    if (auto value{argsman.GetArg("-stdiobus")}) {
+        const std::string& mode_str = *value;
+        if (mode_str == "off") {
+            options.stdio_bus_mode = StdioBusMode::Off;
+        } else if (mode_str == "shadow") {
+            options.stdio_bus_mode = StdioBusMode::Shadow;
+            LogInfo("stdio_bus enabled in shadow mode (observe only)");
+        } else if (mode_str == "active") {
+            options.stdio_bus_mode = StdioBusMode::Active;
+            LogInfo("stdio_bus enabled in active mode");
+        } else {
+            // Fail-fast on unknown value - will be caught by InitError in caller
+            LogError("Unknown -stdiobus mode: %s (valid: off, shadow, active)", mode_str);
+        }
+    }
+
+    // Parse -stdiobusbackpressure (Phase 3: Message handler saturation mitigation)
+    if (auto value{argsman.GetBoolArg("-stdiobusbackpressure")}) {
+        options.backpressure_enable = *value;
+        if (*value) {
+            LogInfo("stdio_bus backpressure enabled for message processing");
+        }
+    }
+
+    // Backpressure tuning parameters (advanced, usually defaults are fine)
+    if (auto value{argsman.GetIntArg("-stdiobusbackpressure-heavymsgs")}) {
+        options.backpressure_max_heavy_msgs_per_loop = int32_t(std::clamp<int64_t>(*value, 1, 100));
+    }
+    if (auto value{argsman.GetIntArg("-stdiobusbackpressure-parsebudget")}) {
+        options.backpressure_parse_us_budget = std::clamp<int64_t>(*value, 100, 100000);
+    }
+    if (auto value{argsman.GetIntArg("-stdiobusbackpressure-peerheavy")}) {
+        options.backpressure_max_peer_heavy_per_loop = int32_t(std::clamp<int64_t>(*value, 1, 20));
+    }
 }
 
 } // namespace node

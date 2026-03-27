@@ -32,6 +32,7 @@
 #include <netmessagemaker.h>
 #include <node/blockstorage.h>
 #include <node/connection_types.h>
+#include <node/msgproc_backpressure.h>
 #include <node/protocol_version.h>
 #include <node/timeoffsets.h>
 #include <node/txdownloadman.h>
@@ -529,6 +530,10 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex);
     bool SendMessages(CNode& node) override
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, g_msgproc_mutex, !m_tx_download_mutex);
+    void OnMsgProcLoopBegin(size_t num_peers) override
+        EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+    void OnMsgProcLoopEnd(bool had_work) override
+        EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     /** Implement PeerManager */
     void StartScheduledTasks(CScheduler& scheduler) override;
@@ -1093,6 +1098,26 @@ private:
 
     /// The transactions to be broadcast privately.
     PrivateBroadcast m_tx_for_private_broadcast;
+
+    // ========== Phase 3: Message Handler Saturation (#27623) ==========
+    
+    /** Per-loop budget for message processing (reset each iteration) */
+    node::MsgProcLoopBudget m_msgproc_loop_budget GUARDED_BY(g_msgproc_mutex);
+    
+    /** Per-peer loop state for fairness tracking */
+    std::map<NodeId, node::MsgProcPeerLoopState> m_peer_loop_states GUARDED_BY(g_msgproc_mutex);
+    
+    /** Loop iteration counter for metrics */
+    int64_t m_msgproc_loop_iteration GUARDED_BY(g_msgproc_mutex) = 0;
+    
+    /** Loop start timestamp for metrics */
+    int64_t m_loop_start_us GUARDED_BY(g_msgproc_mutex) = 0;
+    
+    /** Number of peers scanned in current loop */
+    int32_t m_loop_peers_scanned GUARDED_BY(g_msgproc_mutex) = 0;
+    
+    /** Number of messages processed in current loop */
+    int32_t m_loop_msgs_processed GUARDED_BY(g_msgproc_mutex) = 0;
 };
 
 const CNodeState* PeerManagerImpl::State(NodeId pnode) const
@@ -5165,6 +5190,79 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     CNetMessage& msg{poll_result->first};
     bool fMoreWork = poll_result->second;
 
+    // Phase 3: Emit OnMsgProcPoll event
+    if (m_opts.stdio_bus_hooks->Enabled()) {
+        node::MsgProcPollEvent ev{
+            .peer_id = node.GetId(),
+            .msg_type = msg.m_type,
+            .msg_size_bytes = msg.m_recv.size(),
+            .poll_more_work = fMoreWork,
+            .recv_queue_msgs = 0,  // TODO: wire queue stats if available
+            .recv_queue_bytes = 0,
+            .timestamp_us = node::GetMonotonicTimeUs()
+        };
+        m_opts.stdio_bus_hooks->OnMsgProcPoll(ev);
+    }
+
+    // Phase 3: Backpressure admission check (only when enabled)
+    if (m_opts.backpressure_enable) {
+        // Get or create peer loop state
+        auto& peer_loop_state = m_peer_loop_states[node.GetId()];
+        
+        const node::DeferResult defer_result = node::ShouldDeferMessage(
+            msg.m_type,
+            msg.m_recv.size(),
+            0, // recv_queue_msgs - TODO: wire if available
+            0, // recv_queue_bytes - TODO: wire if available
+            m_msgproc_loop_budget,
+            peer_loop_state,
+            m_opts.backpressure_enable
+        );
+        
+        // Emit backpressure decision event
+        if (m_opts.stdio_bus_hooks->Enabled()) {
+            node::MsgProcBackpressureEvent ev{
+                .peer_id = node.GetId(),
+                .msg_type = msg.m_type,
+                .priority = node::ClassifyMsgPriority(msg.m_type, msg.m_recv.size()),
+                .decision = defer_result.drop ? node::BackpressureDecision::DropLowPri :
+                           (defer_result.defer ? node::BackpressureDecision::Defer : node::BackpressureDecision::Admit),
+                .reason = defer_result.reason,
+                .timestamp_us = node::GetMonotonicTimeUs(),
+                .recv_queue_msgs = 0,
+                .recv_queue_bytes = 0,
+                .global_inflight_blocks = 0,
+                .loop_budget_parse_us_left = m_msgproc_loop_budget.parse_us_left,
+                .loop_budget_heavy_msgs_left = m_msgproc_loop_budget.heavy_msgs_left,
+                .peer_heavy_msgs_processed = peer_loop_state.heavy_msgs_processed,
+                .max_peer_heavy_msgs_per_loop = m_msgproc_loop_budget.max_peer_heavy_per_loop
+            };
+            m_opts.stdio_bus_hooks->OnMsgProcBackpressure(ev);
+        }
+        
+        if (defer_result.drop) {
+            // Drop low-priority message under pressure
+            m_msgproc_loop_budget.msgs_dropped++;
+            if (m_opts.stdio_bus_hooks->Enabled()) {
+                node::MsgProcDropEvent ev{
+                    .peer_id = node.GetId(),
+                    .msg_type = msg.m_type,
+                    .reason = defer_result.reason,
+                    .dropped_count = static_cast<size_t>(m_msgproc_loop_budget.msgs_dropped),
+                    .timestamp_us = node::GetMonotonicTimeUs()
+                };
+                m_opts.stdio_bus_hooks->OnMsgProcDrop(ev);
+            }
+            return fMoreWork; // Skip processing, continue to next message
+        }
+        
+        if (defer_result.defer) {
+            // Defer heavy message - don't process now, let other peers have a turn
+            m_msgproc_loop_budget.msgs_deferred++;
+            return true; // Signal more work available
+        }
+    }
+
     TRACEPOINT(net, inbound_message,
         node.GetId(),
         node.m_addr_name.c_str(),
@@ -5177,6 +5275,10 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     if (m_opts.capture_messages) {
         CaptureMessage(node.addr, msg.m_type, MakeUCharSpan(msg.m_recv), /*is_incoming=*/true);
     }
+
+    // Phase 3: Track processing time for budget consumption
+    const int64_t process_start_us = node::GetMonotonicTimeUs();
+    const bool is_heavy = node::IsHeavyMsgType(msg.m_type, msg.m_recv.size());
 
     try {
         ProcessMessage(peer, node, msg.m_type, msg.m_recv, msg.m_time, interruptMsgProc);
@@ -5198,7 +5300,86 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
         LogDebug(BCLog::NET, "%s(%s, %u bytes): Unknown exception caught\n", __func__, SanitizeString(msg.m_type), msg.m_message_size);
     }
 
+    // Phase 3: Update budget consumption after processing
+    const int64_t process_end_us = node::GetMonotonicTimeUs();
+    const int64_t process_time_us = process_end_us - process_start_us;
+    
+    // Increment message counter for loop metrics
+    m_loop_msgs_processed++;
+    
+    if (is_heavy && m_opts.backpressure_enable) {
+        m_msgproc_loop_budget.ConsumeHeavyMsg(process_time_us);
+        m_peer_loop_states[node.GetId()].heavy_msgs_processed++;
+    }
+    
+    // Phase 3: Emit OnMsgProcStage event for process stage
+    if (m_opts.stdio_bus_hooks->Enabled()) {
+        node::MsgProcStageEvent ev{
+            .peer_id = node.GetId(),
+            .msg_type = msg.m_type,
+            .stage = node::MsgProcStage::Process,
+            .start_us = process_start_us,
+            .end_us = process_end_us,
+            .success = true
+        };
+        m_opts.stdio_bus_hooks->OnMsgProcStage(ev);
+    }
+
     return fMoreWork;
+}
+
+void PeerManagerImpl::OnMsgProcLoopBegin(size_t num_peers)
+{
+    AssertLockHeld(g_msgproc_mutex);
+    
+    // Record loop start time
+    m_loop_start_us = node::GetMonotonicTimeUs();
+    
+    // Reset per-loop budget
+    m_msgproc_loop_budget.Reset();
+    
+    // Apply configured limits
+    if (m_opts.backpressure_enable) {
+        m_msgproc_loop_budget.heavy_msgs_left = m_opts.backpressure_max_heavy_msgs_per_loop;
+        m_msgproc_loop_budget.parse_us_left = m_opts.backpressure_parse_us_budget;
+        m_msgproc_loop_budget.max_peer_heavy_per_loop = m_opts.backpressure_max_peer_heavy_per_loop;
+        m_msgproc_loop_budget.queue_high_watermark_msgs = m_opts.backpressure_queue_hi_watermark_msgs;
+        m_msgproc_loop_budget.queue_high_watermark_bytes = m_opts.backpressure_queue_hi_watermark_bytes;
+    }
+    
+    // Reset per-peer loop states
+    for (auto& [peer_id, state] : m_peer_loop_states) {
+        state.Reset();
+    }
+    
+    // Increment loop iteration counter
+    m_msgproc_loop_iteration++;
+    m_loop_peers_scanned = static_cast<int32_t>(num_peers);
+    m_loop_msgs_processed = 0;
+}
+
+void PeerManagerImpl::OnMsgProcLoopEnd(bool had_work)
+{
+    AssertLockHeld(g_msgproc_mutex);
+    
+    const int64_t loop_end_us = node::GetMonotonicTimeUs();
+    
+    // Emit OnMsgProcLoop event with extended metrics
+    if (m_opts.stdio_bus_hooks->Enabled()) {
+        node::MsgProcLoopEvent ev{
+            .iteration = m_msgproc_loop_iteration,
+            .start_us = m_loop_start_us,
+            .end_us = loop_end_us,
+            .peers_scanned = m_loop_peers_scanned,
+            .msgs_processed = m_loop_msgs_processed,
+            .msgs_deferred = m_msgproc_loop_budget.msgs_deferred,
+            .msgs_dropped = m_msgproc_loop_budget.msgs_dropped,
+            .had_work = had_work,
+            .parse_us_consumed = m_msgproc_loop_budget.parse_us_consumed,
+            .heavy_msgs_consumed = m_msgproc_loop_budget.heavy_msgs_consumed
+        };
+        m_opts.stdio_bus_hooks->OnMsgProcLoop(ev);
+    }
 }
 
 void PeerManagerImpl::ConsiderEviction(CNode& pto, Peer& peer, std::chrono::seconds time_in_seconds)
