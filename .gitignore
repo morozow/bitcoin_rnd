@@ -27,3 +27,6 @@ target/
 /guix-build-*
 
 /ci/scratch/
+
+sandbox
+.kiro
