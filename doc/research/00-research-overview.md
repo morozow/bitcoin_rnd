@@ -78,6 +78,7 @@ A formal calculus for reasoning about information flow across AI/deterministic b
 | `08-industrial-case-study.md` | Application to industrial control systems | ✓ Complete | ✓ Full |
 | `09-comparative-evaluation.md` | Baseline vs AI-assisted performance analysis | ✓ Complete | ✓ Full |
 | `10-future-directions.md` | Open problems and research roadmap | ✓ Complete | ✓ Full |
+| `11-assurance-agility-rfc7696-analysis.md` | RFC 7696 applicability, downgrade taxonomy, assurance agility profile | ✓ Complete | ✓ Full |
 
 ## Claim of Novelty
 

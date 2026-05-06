@@ -28,5 +28,6 @@ target/
 
 /ci/scratch/
 
-sandbox
-.kiro
+sandbox/
+.kiro/
+.ai/
