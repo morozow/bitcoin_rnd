@@ -1,10 +1,26 @@
 {
   "pools": [
     {
-      "id": "mempool-monitor",
+      "id": "block-bench",
       "command": "/usr/bin/python3",
       "args": [
-        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/mempool_monitor_ipc.py"
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/connectblock_benchmark.py"
+      ],
+      "instances": 1
+    },
+    {
+      "id": "mempool-mon",
+      "command": "/usr/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/mempool_monitor.py"
+      ],
+      "instances": 1
+    },
+    {
+      "id": "p2p-traffic",
+      "command": "/usr/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/p2p_traffic.py"
       ],
       "instances": 1
     }
