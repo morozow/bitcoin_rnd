@@ -1,0 +1,22 @@
+{
+  "baseline": {
+    "mode": "off",
+    "blocks": 500,
+    "time_s": 30.19561004638672,
+    "blocks_per_s": 18.54587693664128,
+    "memory_mb": 0.0006256103515625
+  },
+  "shadow": {
+    "mode": "shadow",
+    "blocks": 500,
+    "time_s": 33.88582801818848,
+    "blocks_per_s": 16.361124208467057,
+    "memory_mb": 0.0006256103515625
+  },
+  "overhead": {
+    "time_pct": 12.221041290879098,
+    "memory_pct": 0.0,
+    "cpu_pct": 12.221041290879098
+  },
+  "pass": false
+}

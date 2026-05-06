@@ -3260,7 +3260,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
             ev.via = node::BlockAnnounceVia::Headers;
             // Calculate chainwork delta relative to our tip
             const CBlockIndex* tip = m_chainman.ActiveChain().Tip();
-            ev.chainwork_delta = tip ? static_cast<int64_t>((pindexLast->nChainWork - tip->nChainWork).IsNegative() ? 0 : (pindexLast->nChainWork - tip->nChainWork).GetLow64()) : 0;
+            ev.chainwork_delta = tip ? static_cast<int64_t>((pindexLast->nChainWork > tip->nChainWork) ? static_cast<int64_t>((pindexLast->nChainWork - tip->nChainWork).GetLow64()) : 0) : 0;
             ev.height = pindexLast->nHeight;
             ev.timestamp_us = node::GetMonotonicTimeUs();
             m_opts.stdio_bus_hooks->OnBlockAnnounce(ev);
@@ -4694,7 +4694,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                 ev.peer_id = pfrom.GetId();
                 ev.via = node::BlockAnnounceVia::CompactBlock;
                 const CBlockIndex* tip = m_chainman.ActiveChain().Tip();
-                ev.chainwork_delta = tip ? static_cast<int64_t>((pindex->nChainWork - tip->nChainWork).IsNegative() ? 0 : (pindex->nChainWork - tip->nChainWork).GetLow64()) : 0;
+                ev.chainwork_delta = tip ? static_cast<int64_t>((pindex->nChainWork > tip->nChainWork) ? static_cast<int64_t>((pindex->nChainWork - tip->nChainWork).GetLow64()) : 0) : 0;
                 ev.height = pindex->nHeight;
                 ev.timestamp_us = node::GetMonotonicTimeUs();
                 m_opts.stdio_bus_hooks->OnBlockAnnounce(ev);

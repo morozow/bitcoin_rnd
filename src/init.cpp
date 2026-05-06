@@ -59,6 +59,7 @@
 #include <node/miner.h>
 #include <node/peerman_args.h>
 #include <node/stdio_bus_observer.h>
+#include <node/stdio_bus_sdk_hooks.h>
 #include <policy/feerate.h>
 #include <policy/fees/block_policy_estimator.h>
 #include <policy/fees/block_policy_estimator_args.h>
@@ -1837,6 +1838,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     // Register stdio_bus validation observer if enabled
     if (peerman_opts.stdio_bus_mode != node::StdioBusMode::Off) {
+        // Replace NoOp hooks with real SDK hooks using config file
+        peerman_opts.stdio_bus_hooks = node::MakeStdioBusSdkHooks(
+            "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/perf/stdiobus_trace.json",
+            peerman_opts.stdio_bus_mode == node::StdioBusMode::Shadow);
+        if (!peerman_opts.stdio_bus_hooks) {
+            LogError("stdio_bus: Failed to create SDK hooks, falling back to NoOp");
+            peerman_opts.stdio_bus_hooks = std::make_shared<node::NoOpStdioBusHooks>();
+        }
         g_stdio_bus_observer = std::make_unique<node::StdioBusValidationObserver>(peerman_opts.stdio_bus_hooks);
         validation_signals.RegisterValidationInterface(g_stdio_bus_observer.get());
         LogInfo("stdio_bus validation observer registered");

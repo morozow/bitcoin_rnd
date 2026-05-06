@@ -22,6 +22,15 @@ namespace node {
  * @brief Statistics for StdioBusSdkHooks
  */
 struct StdioBusStats {
+    uint64_t events_total{0};
+    uint64_t events_dropped{0};
+    uint64_t events_sent{0};
+    uint64_t errors{0};
+    int64_t last_hook_latency_us{0};
+    size_t queue_depth{0};
+};
+
+struct StdioBusStatsInternal {
     std::atomic<uint64_t> events_total{0};
     std::atomic<uint64_t> events_dropped{0};
     std::atomic<uint64_t> events_sent{0};
@@ -151,7 +160,7 @@ private:
     std::thread m_worker_thread;
 
     // Statistics
-    mutable StdioBusStats m_stats;
+    mutable StdioBusStatsInternal m_stats;
 
     // SDK handle (opaque, managed by implementation)
     struct SdkImpl;

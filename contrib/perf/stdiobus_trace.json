@@ -1,0 +1,12 @@
+{
+  "pools": [
+    {
+      "id": "mempool-monitor",
+      "command": "/usr/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/mempool_monitor_ipc.py"
+      ],
+      "instances": 1
+    }
+  ]
+}

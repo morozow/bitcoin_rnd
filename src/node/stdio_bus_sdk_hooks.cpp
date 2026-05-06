@@ -7,9 +7,15 @@
 #include <logging.h>
 #include <tinyformat.h>
 #include <util/strencodings.h>
+#include <stdiobus/bus.hpp>
 
 #include <chrono>
 #include <sstream>
+#include <thread>
+#include <unistd.h>
+#include <fcntl.h>
+#include <cerrno>
+#include <cstring>
 
 namespace node {
 
@@ -20,40 +26,60 @@ namespace node {
 struct StdioBusSdkHooks::SdkImpl {
     std::string config_path;
     bool connected{false};
-    
-    // In real implementation, this would be:
-    // std::unique_ptr<stdiobus::Bus> bus;
-    
+    std::unique_ptr<stdiobus::Bus> bus;
+
     bool Connect(const std::string& path) {
         config_path = path;
-        // TODO: Real SDK integration
-        // bus = std::make_unique<stdiobus::Bus>(path);
-        // if (auto err = bus->start(); err) {
-        //     LogDebug(BCLog::NET, "stdio_bus SDK failed to start: %s\n", err.message());
-        //     return false;
-        // }
+
+        // Create Bus with a real worker process for full IPC pipeline.
+        // The worker receives events through fork/exec + pipe (real IPC).
+        stdiobus::Options opts;
+        if (!path.empty()) {
+            opts.config_path = path;
+        } else {
+            // Embedded config with a real worker: /bin/cat reads and discards
+            // This exercises the full pipeline: ingest → framing → routing → pipe write → worker read
+            opts.config_json = R"({
+                "pools": [{
+                    "name": "trace",
+                    "command": ["/bin/cat"],
+                    "count": 1
+                }]
+            })";
+        }
+        opts.on_error = [](stdiobus::ErrorCode code, std::string_view msg) {
+            LogDebug(BCLog::NET, "stdio_bus error [%d]: %s\n", static_cast<int>(code), std::string(msg));
+        };
+
+        bus = std::make_unique<stdiobus::Bus>(std::move(opts));
+
+        if (auto err = bus->start(); err) {
+            LogError("stdio_bus: Failed to start bus: %s\n", err.message());
+            bus.reset();
+            return false;
+        }
+
         connected = true;
-        LogDebug(BCLog::NET, "stdio_bus SDK connected (config: %s)\n", path);
+        LogDebug(BCLog::NET, "stdio_bus: Bus started (config: %s)\n", path.empty() ? "<embedded>" : path);
         return true;
     }
-    
+
     bool Send(const std::string& message) {
-        if (!connected) return false;
-        // TODO: Real SDK integration
-        // if (auto err = bus->send(message); err) {
-        //     return false;
-        // }
-        LogDebug(BCLog::NET, "stdio_bus SDK send: %s\n", message.substr(0, 100));
+        if (!connected || !bus) return false;
+        // Send through the real stdio_bus protocol stack:
+        // ingest → framing → routing → event loop
+        if (auto err = bus->send(message); err) {
+            return false;
+        }
         return true;
     }
-    
+
     void Disconnect() {
-        if (connected) {
-            // TODO: Real SDK integration
-            // bus->stop(std::chrono::seconds(5));
-            // bus.reset();
+        if (connected && bus) {
+            bus->stop(std::chrono::seconds(5));
+            bus.reset();
             connected = false;
-            LogDebug(BCLog::NET, "stdio_bus SDK disconnected\n");
+            LogDebug(BCLog::NET, "stdio_bus: Bus stopped\n");
         }
     }
 };
@@ -587,12 +613,12 @@ bool StdioBusSdkHooks::SendToSdk(const std::string& json)
 StdioBusStats StdioBusSdkHooks::GetStats() const
 {
     StdioBusStats stats;
-    stats.events_total.store(m_stats.events_total.load(std::memory_order_relaxed));
-    stats.events_dropped.store(m_stats.events_dropped.load(std::memory_order_relaxed));
-    stats.events_sent.store(m_stats.events_sent.load(std::memory_order_relaxed));
-    stats.errors.store(m_stats.errors.load(std::memory_order_relaxed));
-    stats.last_hook_latency_us.store(m_stats.last_hook_latency_us.load(std::memory_order_relaxed));
-    stats.queue_depth.store(m_stats.queue_depth.load(std::memory_order_relaxed));
+    stats.events_total = m_stats.events_total.load(std::memory_order_relaxed);
+    stats.events_dropped = m_stats.events_dropped.load(std::memory_order_relaxed);
+    stats.events_sent = m_stats.events_sent.load(std::memory_order_relaxed);
+    stats.errors = m_stats.errors.load(std::memory_order_relaxed);
+    stats.last_hook_latency_us = m_stats.last_hook_latency_us.load(std::memory_order_relaxed);
+    stats.queue_depth = m_stats.queue_depth.load(std::memory_order_relaxed);
     return stats;
 }
 
