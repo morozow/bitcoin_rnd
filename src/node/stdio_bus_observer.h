@@ -7,8 +7,11 @@
 
 #include <node/stdio_bus_hooks.h>
 #include <validationinterface.h>
+#include <txmempool.h>
 
 #include <memory>
+#include <map>
+#include <mutex>
 
 namespace node {
 
@@ -34,6 +37,42 @@ public:
     /** Check if observer is enabled */
     bool Enabled() const { return m_hooks && m_hooks->Enabled(); }
 
+    // Test-only accessors that proxy to the protected CValidationInterface
+    // callbacks so unit tests can exercise the observer without registering it.
+    void TestInvokeBlockChecked(const std::shared_ptr<const CBlock>& block,
+                                const BlockValidationState& state)
+    {
+        BlockChecked(block, state);
+    }
+    void TestInvokeBlockConnected(const kernel::ChainstateRole& role,
+                                  const std::shared_ptr<const CBlock>& block,
+                                  const CBlockIndex* pindex)
+    {
+        BlockConnected(role, block, pindex);
+    }
+    void TestInvokeTransactionAddedToMempool(const NewMempoolTransactionInfo& tx,
+                                             uint64_t mempool_sequence)
+    {
+        TransactionAddedToMempool(tx, mempool_sequence);
+    }
+    void TestInvokeTransactionRemovedFromMempool(const CTransactionRef& tx,
+                                                 MemPoolRemovalReason reason,
+                                                 uint64_t mempool_sequence)
+    {
+        TransactionRemovedFromMempool(tx, reason, mempool_sequence);
+    }
+    void TestInvokeMempoolTransactionsRemovedForBlock(
+        const std::vector<RemovedMempoolTransactionInfo>& txs,
+        unsigned int nBlockHeight)
+    {
+        MempoolTransactionsRemovedForBlock(txs, nBlockHeight);
+    }
+    void TestInvokeChainStateFlushed(const kernel::ChainstateRole& role,
+                                     const CBlockLocator& locator)
+    {
+        ChainStateFlushed(role, locator);
+    }
+
 protected:
     // CValidationInterface callbacks
 
@@ -58,6 +97,29 @@ protected:
      */
     void TransactionAddedToMempool(const NewMempoolTransactionInfo& tx,
                                    uint64_t mempool_sequence) override;
+
+    /**
+     * Called when a transaction is removed from mempool.
+     * Covers mempool:removed tracepoint.
+     */
+    void TransactionRemovedFromMempool(const CTransactionRef& tx,
+                                       MemPoolRemovalReason reason,
+                                       uint64_t mempool_sequence) override;
+
+    /**
+     * Called when transactions are removed from mempool due to block connection.
+     * Covers batch mempool:removed events.
+     */
+    void MempoolTransactionsRemovedForBlock(
+        const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block,
+        unsigned int nBlockHeight) override;
+
+    /**
+     * Called when chain state is flushed to disk.
+     * Covers utxocache:flush tracepoint.
+     */
+    void ChainStateFlushed(const kernel::ChainstateRole& role,
+                           const CBlockLocator& locator) override;
 
 private:
     std::shared_ptr<StdioBusHooks> m_hooks;

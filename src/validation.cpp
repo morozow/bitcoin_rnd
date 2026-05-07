@@ -30,6 +30,7 @@
 #include <kernel/warning.h>
 #include <logging/timer.h>
 #include <node/blockstorage.h>
+#include <node/stdio_bus_hooks.h>
 #include <node/utxo_snapshot.h>
 #include <policy/ephemeral_policy.h>
 #include <policy/policy.h>
@@ -1233,6 +1234,23 @@ void MemPoolAccept::FinalizeSubpackage(const ATMPArgs& args)
                 feerate.fee,
                 replaced_with_tx
         );
+
+        // stdio_bus USDT-mirror (mempool:replaced)
+        if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+            node::TxReplacedEvent ev{
+                .replaced_txid = it->GetTx().GetHash().ToUint256(),
+                .replaced_vsize = static_cast<size_t>(it->GetTxSize()),
+                .replaced_fee = it->GetFee(),
+                .replaced_entry_time = static_cast<int64_t>(
+                    std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(it->GetTime()).count()),
+                .replacement_txid = tx_or_package_hash,
+                .replacement_vsize = static_cast<size_t>(feerate.size),
+                .replacement_fee = feerate.fee,
+                .timestamp_us = node::GetMonotonicTimeUs(),
+            };
+            hooks->OnTxReplaced(ev);
+        }
+
         m_subpackage.m_replaced_transactions.push_back(it->GetSharedTx());
     }
     m_subpackage.m_changeset->Apply();
@@ -1797,6 +1815,16 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
                 tx->GetHash().data(),
                 result.m_state.GetRejectReason().c_str()
         );
+
+        // stdio_bus USDT-mirror (mempool:rejected)
+        if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+            node::TxRejectedEvent ev{
+                .txid = tx->GetHash().ToUint256(),
+                .reason = result.m_state.GetRejectReason(),
+                .timestamp_us = node::GetMonotonicTimeUs(),
+            };
+            hooks->OnTxRejected(ev);
+        }
     }
     // After we've (potentially) uncached entries, ensure our coins cache is still within its size limits
     BlockValidationState state_dummy;
@@ -2669,6 +2697,23 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         Ticks<std::chrono::nanoseconds>(time_5 - time_start)
     );
 
+    // stdio_bus USDT-mirror (validation:block_connected)
+    // Emitted directly from ConnectBlock() so we get the exact duration_ns
+    // and inputs/sigops counters that USDT exposes. The CValidationInterface
+    // observer (BlockConnected) also fires, but without these fields.
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::BlockConnectedEvent ev{
+            .hash = block_hash,
+            .height = pindex->nHeight,
+            .tx_count = block.vtx.size(),
+            .inputs_count = nInputs,
+            .sigops_cost = nSigOpsCost,
+            .duration_ns = Ticks<std::chrono::nanoseconds>(time_5 - time_start),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnBlockConnected(ev);
+    }
+
     return true;
 }
 
@@ -2820,6 +2865,19 @@ bool Chainstate::FlushStateToDisk(
                     (uint64_t)coins_count,
                     (uint64_t)coins_mem_usage,
                     (bool)fFlushForPrune);
+
+                // stdio_bus USDT-mirror (utxocache:flush)
+                if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+                    node::UTXOCacheFlushEvent ev{
+                        .duration_us = int64_t{Ticks<std::chrono::microseconds>(NodeClock::now() - nNow)},
+                        .mode = static_cast<int>(mode),
+                        .coins_count = static_cast<int64_t>(coins_count),
+                        .coins_mem_usage = static_cast<int64_t>(coins_mem_usage),
+                        .is_flush_for_prune = fFlushForPrune,
+                        .timestamp_us = node::GetMonotonicTimeUs(),
+                    };
+                    hooks->OnUTXOCacheFlush(ev);
+                }
             }
         }
 

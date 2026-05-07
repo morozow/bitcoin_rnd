@@ -228,6 +228,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/mini_miner.cpp
   node/minisketchwrapper.cpp
   node/peerman_args.cpp
+  node/stdio_bus_hooks.cpp
   node/stdio_bus_observer.cpp
   node/stdio_bus_sdk_hooks.cpp
   ${PROJECT_SOURCE_DIR}/src/stdio_bus/src/bus.cpp
@@ -295,12 +296,18 @@ target_link_libraries(bitcoin_node
 target_include_directories(bitcoin_node PRIVATE
   ${PROJECT_SOURCE_DIR}/src/stdio_bus/include
 )
-set(STDIO_BUS_LIB_PATH "$ENV{HOME}/Projects/Target-Insight-Function/stdio-Bus/stdiobus-sdk/stdiobus-rust/crates/stdiobus-backend-native/lib/aarch64-apple-darwin/libstdio_bus.a")
-if(EXISTS ${STDIO_BUS_LIB_PATH})
-  target_link_libraries(bitcoin_node PRIVATE ${STDIO_BUS_LIB_PATH})
-  message(STATUS "stdio_bus: Linked real libstdio_bus.a")
+if(STDIO_BUS_LIB_OVERRIDE AND EXISTS "${STDIO_BUS_LIB_OVERRIDE}")
+  target_link_libraries(bitcoin_node PRIVATE ${STDIO_BUS_LIB_OVERRIDE})
+  message(STATUS "stdio_bus: Linked override from ${STDIO_BUS_LIB_OVERRIDE}")
 else()
-  message(WARNING "stdio_bus: libstdio_bus.a not found at ${STDIO_BUS_LIB_PATH}, SDK calls will fail at runtime")
+  set(STDIO_BUS_LIB_PATH "$ENV{HOME}/Projects/Target-Insight-Function/stdio-Bus/stdiobus-sdk/stdiobus-rust/crates/stdiobus-backend-native/lib/aarch64-apple-darwin/libstdio_bus.a")
+  if(EXISTS ${STDIO_BUS_LIB_PATH})
+    target_link_libraries(bitcoin_node PRIVATE ${STDIO_BUS_LIB_PATH})
+    message(STATUS "stdio_bus: Linked real libstdio_bus.a")
+  else()
+    target_sources(bitcoin_node PRIVATE ${PROJECT_SOURCE_DIR}/src/stdio_bus/src/stub.c)
+    message(STATUS "stdio_bus: Using stub (libstdio_bus.a not found)")
+  endif()
 endif()
 if(WITH_EMBEDDED_ASMAP)
   target_compile_definitions(bitcoin_node PRIVATE ENABLE_EMBEDDED_ASMAP=1)

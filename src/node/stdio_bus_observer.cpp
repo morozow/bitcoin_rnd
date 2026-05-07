@@ -61,12 +61,12 @@ void StdioBusValidationObserver::BlockConnected(
     const std::shared_ptr<const CBlock>& block,
     const CBlockIndex* pindex)
 {
-    // BlockConnected is called after BlockChecked for accepted blocks.
-    // We could emit additional events here if needed, but for now
-    // BlockChecked provides the validation result we need.
-    
-    // Note: pindex->nHeight is available here if we need height info
-    // in future iterations.
+    // Intentionally empty: the USDT-mirror for validation:block_connected is
+    // emitted directly from Chainstate::ConnectBlock (src/validation.cpp) with
+    // accurate inputs_count/sigops_cost/duration_ns. Those fields are not
+    // available via CValidationInterface, so handling here would either
+    // double-emit with zeroes (losing parity) or be a degraded signal.
+    (void)role; (void)block; (void)pindex;
 }
 
 void StdioBusValidationObserver::TransactionAddedToMempool(
@@ -94,6 +94,41 @@ void StdioBusValidationObserver::TransactionAddedToMempool(
         // Fail silently - hooks must not affect consensus
         LogDebug(BCLog::NET, "stdio_bus: OnTxAdmission hook threw exception\n");
     }
+}
+
+void StdioBusValidationObserver::TransactionRemovedFromMempool(
+    const CTransactionRef& tx,
+    MemPoolRemovalReason reason,
+    uint64_t mempool_sequence)
+{
+    // Intentionally empty: the USDT-mirror for mempool:removed is emitted
+    // directly from CTxMemPool::removeUnchecked (src/txmempool.cpp) with
+    // the real entry_time/fee/vsize fields that USDT exposes. Handling it
+    // here as well would cause double-emission of tx_removed events with
+    // strictly less information (entry_time/fee are not available in this
+    // CValidationInterface callback).
+    (void)tx; (void)reason; (void)mempool_sequence;
+}
+
+void StdioBusValidationObserver::MempoolTransactionsRemovedForBlock(
+    const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block,
+    unsigned int nBlockHeight)
+{
+    // Intentionally empty: each transaction in txs_removed_for_block has
+    // already been observed by CTxMemPool::removeUnchecked with
+    // reason=BLOCK, which emits an OnTxRemoved directly.
+    (void)txs_removed_for_block; (void)nBlockHeight;
+}
+
+void StdioBusValidationObserver::ChainStateFlushed(
+    const kernel::ChainstateRole& role,
+    const CBlockLocator& locator)
+{
+    // Intentionally empty: the USDT-mirror for utxocache:flush is emitted
+    // directly from Chainstate::FlushStateToDisk (src/validation.cpp) with
+    // accurate duration_us/mode/coins_count/coins_mem_usage/is_prune that
+    // USDT exposes. CValidationInterface does not provide these.
+    (void)role; (void)locator;
 }
 
 } // namespace node

@@ -5,6 +5,7 @@
 #include <coins.h>
 
 #include <consensus/consensus.h>
+#include <node/stdio_bus_hooks.h>
 #include <random.h>
 #include <uint256.h>
 #include <util/log.h>
@@ -127,6 +128,22 @@ void CCoinsViewCache::AddCoin(const COutPoint &outpoint, Coin&& coin, bool possi
            (uint32_t)it->second.coin.nHeight,
            (int64_t)it->second.coin.out.nValue,
            (bool)it->second.coin.IsCoinBase());
+
+    // stdio_bus USDT-mirror (utxocache:add) — hot path.
+    // The NoOp hooks instance returns Enabled()==false inline, so the
+    // overhead is a single atomic load + predictable branch when stdio_bus
+    // is off.
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::UTXOCacheAddEvent ev{
+            .txid = outpoint.hash.ToUint256(),
+            .vout = outpoint.n,
+            .height = it->second.coin.nHeight,
+            .value = it->second.coin.out.nValue,
+            .is_coinbase = it->second.coin.IsCoinBase(),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnUTXOCacheAdd(ev);
+    }
 }
 
 void CCoinsViewCache::EmplaceCoinInternalDANGER(COutPoint&& outpoint, Coin&& coin) {
@@ -161,6 +178,19 @@ bool CCoinsViewCache::SpendCoin(const COutPoint &outpoint, Coin* moveout) {
            (uint32_t)it->second.coin.nHeight,
            (int64_t)it->second.coin.out.nValue,
            (bool)it->second.coin.IsCoinBase());
+
+    // stdio_bus USDT-mirror (utxocache:spent) — hot path. See utxocache:add note.
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::UTXOCacheSpentEvent ev{
+            .txid = outpoint.hash.ToUint256(),
+            .vout = outpoint.n,
+            .height = it->second.coin.nHeight,
+            .value = it->second.coin.out.nValue,
+            .is_coinbase = it->second.coin.IsCoinBase(),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnUTXOCacheSpent(ev);
+    }
     if (moveout) {
         *moveout = std::move(it->second.coin);
     }
@@ -318,6 +348,19 @@ void CCoinsViewCache::Uncache(const COutPoint& hash)
                (uint32_t)it->second.coin.nHeight,
                (int64_t)it->second.coin.out.nValue,
                (bool)it->second.coin.IsCoinBase());
+
+        // stdio_bus USDT-mirror (utxocache:uncache) — hot path. See utxocache:add note.
+        if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+            node::UTXOCacheUncacheEvent ev{
+                .txid = hash.hash.ToUint256(),
+                .vout = hash.n,
+                .height = it->second.coin.nHeight,
+                .value = it->second.coin.out.nValue,
+                .is_coinbase = it->second.coin.IsCoinBase(),
+                .timestamp_us = node::GetMonotonicTimeUs(),
+            };
+            hooks->OnUTXOCacheUncache(ev);
+        }
         cacheCoins.erase(it);
     }
 }

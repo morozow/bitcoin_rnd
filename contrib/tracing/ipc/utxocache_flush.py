@@ -1,79 +1,69 @@
 #!/usr/bin/env python3
-# Copyright (c) 2022-present The Bitcoin Core developers
+# Copyright (c) 2021-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-
 """
-IPC-based UTXO cache flush monitor — equivalent to log_utxocache_flush.py.
-Receives utxocache:flush events via stdin NDJSON.
+IPC-based UTXO cache flush logger — 1:1 equivalent of
+contrib/tracing/log_utxocache_flush.py.
 
-Tracks: flush duration, mode, coins count, memory usage.
+Reads NDJSON from stdin and processes the stdio_bus USDT-mirror of the
+utxocache:flush tracepoint (emitted in src/validation.cpp right next to
+TRACEPOINT(utxocache, flush, ...)).
+
+Fields consumed from params.type == "utxocache_flush":
+    duration_us, mode, coins_count, coins_mem_usage, is_flush_for_prune
+
+Output (identical columns to log_utxocache_flush.py):
+    Duration (µs)   Mode          Coins Count    Memory Usage    Flush for Prune
 """
 
 import json
 import sys
-import time
 
 
-class UTXOCacheStats:
-    def __init__(self):
-        self.flushes = []
-        self.start_time = time.monotonic()
+FLUSH_MODES = ["NONE", "IF_NEEDED", "PERIODIC", "FORCE_FLUSH", "FORCE_SYNC"]
 
-    def record_flush(self, duration_us, mode, coins_count, coins_mem_usage, is_prune):
-        self.flushes.append({
-            "duration_ms": duration_us / 1000.0,
-            "mode": mode,
-            "coins_count": coins_count,
-            "coins_mem_mb": coins_mem_usage / (1024 * 1024),
-            "is_prune": is_prune,
-            "timestamp": time.monotonic(),
-        })
 
-    def summary(self):
-        runtime = time.monotonic() - self.start_time
-        durations = [f["duration_ms"] for f in self.flushes]
-        return {
-            "runtime_s": round(runtime, 2),
-            "total_flushes": len(self.flushes),
-            "avg_duration_ms": round(sum(durations) / len(durations), 2) if durations else 0,
-            "max_duration_ms": round(max(durations), 2) if durations else 0,
-            "total_coins_flushed": sum(f["coins_count"] for f in self.flushes),
-        }
+def _fmt_row(duration_us, mode, coins_count, coins_mem_usage, is_prune):
+    mode_str = FLUSH_MODES[mode] if 0 <= mode < len(FLUSH_MODES) else f"MODE_{mode}"
+    mem_str = "%.2f kB" % (coins_mem_usage / 1000)
+    return "%-15d %-12s %-15d %-15s %-8s" % (
+        duration_us, mode_str, coins_count, mem_str, is_prune
+    )
 
 
 def main():
-    stats = UTXOCacheStats()
+    # Header matches the eBPF version exactly.
+    print("%-15s %-12s %-15s %-15s %-8s" % (
+        "Duration (µs)", "Mode", "Coins Count", "Memory Usage", "Flush for Prune"
+    ))
+    print("Logging utxocache flushes. Ctrl-C to end...")
+    sys.stdout.flush()
 
+    total = 0
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         try:
-            event = json.loads(line)
+            env = json.loads(line)
         except json.JSONDecodeError:
             continue
+        params = env.get("params") or {}
+        if params.get("type") != "utxocache_flush":
+            continue
 
-        method = event.get("method", "")
-        if method == "utxocache.flush":
-            params = event.get("params", {})
-            stats.record_flush(
-                duration_us=params.get("duration_us", 0),
-                mode=params.get("mode", 0),
-                coins_count=params.get("coins_count", 0),
-                coins_mem_usage=params.get("coins_mem_usage", 0),
-                is_prune=params.get("is_prune", False),
-            )
-            s = stats.summary()
-            print(
-                f"[utxocache] flush #{s['total_flushes']} "
-                f"duration={params.get('duration_us', 0)/1000:.1f}ms "
-                f"coins={params.get('coins_count', 0)}",
-                file=sys.stderr,
-            )
+        duration_us = int(params.get("duration_us", 0))
+        mode = int(params.get("mode", 0))
+        coins_count = int(params.get("coins_count", 0))
+        coins_mem_usage = int(params.get("coins_mem_usage", 0))
+        is_prune = bool(params.get("is_flush_for_prune", False))
 
-    s = stats.summary()
-    print(json.dumps(s, indent=2), file=sys.stderr)
+        print(_fmt_row(duration_us, mode, coins_count, coins_mem_usage, is_prune))
+        sys.stdout.flush()
+        total += 1
+
+    print(json.dumps({"flushes": total}), file=sys.stderr)
 
 
 if __name__ == "__main__":

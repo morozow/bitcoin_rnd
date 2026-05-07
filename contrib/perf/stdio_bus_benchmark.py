@@ -129,7 +129,7 @@ def run_benchmark(
         "-daemon",
         "-server",
         f"-stdiobus={mode}",
-        "-debug=net",
+        f"-stdiobusconfig={Path(__file__).parent / 'stdiobus_trace.json'}",
         "-printtoconsole=0",
     ]
     

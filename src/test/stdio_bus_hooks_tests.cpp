@@ -175,6 +175,82 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         m_block_source_resolved.push_back(ev);
     }
+
+    // Full eBPF tracepoint coverage
+    void OnTxRemoved(const TxRemovedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_tx_removed.push_back(ev);
+    }
+    void OnTxReplaced(const TxReplacedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_tx_replaced.push_back(ev);
+    }
+    void OnTxRejected(const TxRejectedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_tx_rejected.push_back(ev);
+    }
+    void OnUTXOCacheFlush(const UTXOCacheFlushEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_utxocache_flush.push_back(ev);
+    }
+    void OnPeerConnection(const PeerConnectionEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_peer_connection.push_back(ev);
+    }
+
+    // Full USDT tracepoint parity
+    void OnPeerClosed(const PeerClosedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_peer_closed.push_back(ev);
+    }
+    void OnPeerEvicted(const PeerEvictedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_peer_evicted.push_back(ev);
+    }
+    void OnPeerMisbehaving(const PeerMisbehavingEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_peer_misbehaving.push_back(ev);
+    }
+    void OnOutboundMessage(const OutboundMessageEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_outbound_message.push_back(ev);
+    }
+    void OnMempoolAdded(const MempoolAddedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mempool_added.push_back(ev);
+    }
+    void OnBlockConnected(const BlockConnectedEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_block_connected.push_back(ev);
+    }
+    void OnUTXOCacheAdd(const UTXOCacheAddEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_utxocache_add.push_back(ev);
+    }
+    void OnUTXOCacheSpent(const UTXOCacheSpentEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_utxocache_spent.push_back(ev);
+    }
+    void OnUTXOCacheUncache(const UTXOCacheUncacheEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_utxocache_uncache.push_back(ev);
+    }
+    void OnCoinSelectionSelectedCoins(const CoinSelectionSelectedCoinsEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_cs_selected.push_back(ev);
+    }
+    void OnCoinSelectionNormalCreateTx(const CoinSelectionNormalCreateTxEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_cs_normal.push_back(ev);
+    }
+    void OnCoinSelectionAttemptingAps(const CoinSelectionAttemptingApsEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_cs_attempting_aps.push_back(ev);
+    }
+    void OnCoinSelectionApsCreateTx(const CoinSelectionApsCreateTxEvent& ev) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_cs_aps.push_back(ev);
+    }
     
     // Accessors
     size_t MessageCount() const { std::lock_guard<std::mutex> lock(m_mutex); return m_messages.size(); }
@@ -208,6 +284,26 @@ private:
     std::vector<StallerDetectedEvent> m_staller_events;
     std::vector<CompactBlockDecisionEvent> m_compact_block_decisions;
     std::vector<BlockSourceResolvedEvent> m_block_source_resolved;
+    // Full eBPF tracepoint coverage
+    std::vector<TxRemovedEvent> m_tx_removed;
+    std::vector<TxReplacedEvent> m_tx_replaced;
+    std::vector<TxRejectedEvent> m_tx_rejected;
+    std::vector<UTXOCacheFlushEvent> m_utxocache_flush;
+    std::vector<PeerConnectionEvent> m_peer_connection;
+    // Full USDT tracepoint parity
+    std::vector<PeerClosedEvent> m_peer_closed;
+    std::vector<PeerEvictedEvent> m_peer_evicted;
+    std::vector<PeerMisbehavingEvent> m_peer_misbehaving;
+    std::vector<OutboundMessageEvent> m_outbound_message;
+    std::vector<MempoolAddedEvent> m_mempool_added;
+    std::vector<BlockConnectedEvent> m_block_connected;
+    std::vector<UTXOCacheAddEvent> m_utxocache_add;
+    std::vector<UTXOCacheSpentEvent> m_utxocache_spent;
+    std::vector<UTXOCacheUncacheEvent> m_utxocache_uncache;
+    std::vector<CoinSelectionSelectedCoinsEvent> m_cs_selected;
+    std::vector<CoinSelectionNormalCreateTxEvent> m_cs_normal;
+    std::vector<CoinSelectionAttemptingApsEvent> m_cs_attempting_aps;
+    std::vector<CoinSelectionApsCreateTxEvent> m_cs_aps;
 };
 
 BOOST_AUTO_TEST_CASE(recording_hooks_capture_events)
@@ -271,6 +367,8 @@ BOOST_AUTO_TEST_CASE(hooks_thread_safe)
             for (int i = 0; i < EVENTS_PER_THREAD; ++i) {
                 MessageEvent ev{
                     .peer_id = t,
+                    .addr = "test-addr",
+                    .conn_type = "outbound-full-relay",
                     .msg_type = "test",
                     .size_bytes = static_cast<size_t>(i),
                     .received_us = GetMonotonicTimeUs()
@@ -313,7 +411,7 @@ BOOST_FIXTURE_TEST_CASE(validation_observer_block_checked_accepted, ChainTesting
 {
     auto hooks = std::make_shared<RecordingStdioBusHooks>();
     StdioBusValidationObserver observer(hooks);
-    
+
     // Create a simple block
     CBlock block;
     block.nVersion = 1;
@@ -324,7 +422,7 @@ BOOST_FIXTURE_TEST_CASE(validation_observer_block_checked_accepted, ChainTesting
     
     // Simulate accepted block
     BlockValidationState state;
-    observer.BlockChecked(std::make_shared<const CBlock>(block), state);
+    observer.TestInvokeBlockChecked(std::make_shared<const CBlock>(block), state);
     
     BOOST_CHECK_EQUAL(hooks->BlocksValidatedCount(), 1);
     auto ev = hooks->GetBlockValidated(0);
@@ -337,14 +435,14 @@ BOOST_FIXTURE_TEST_CASE(validation_observer_block_checked_rejected, ChainTesting
 {
     auto hooks = std::make_shared<RecordingStdioBusHooks>();
     StdioBusValidationObserver observer(hooks);
-    
+
     CBlock block;
     block.nVersion = 1;
     
     // Simulate rejected block
     BlockValidationState state;
     state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-duplicate");
-    observer.BlockChecked(std::make_shared<const CBlock>(block), state);
+    observer.TestInvokeBlockChecked(std::make_shared<const CBlock>(block), state);
     
     BOOST_CHECK_EQUAL(hooks->BlocksValidatedCount(), 1);
     auto ev = hooks->GetBlockValidated(0);
@@ -360,12 +458,16 @@ BOOST_AUTO_TEST_CASE(message_event_fields)
 {
     MessageEvent ev{
         .peer_id = 42,
+        .addr = "1.2.3.4:8333",
+        .conn_type = "outbound-full-relay",
         .msg_type = "headers",
         .size_bytes = 162000,
         .received_us = 1234567890123
     };
     
     BOOST_CHECK_EQUAL(ev.peer_id, 42);
+    BOOST_CHECK_EQUAL(ev.addr, "1.2.3.4:8333");
+    BOOST_CHECK_EQUAL(ev.conn_type, "outbound-full-relay");
     BOOST_CHECK_EQUAL(ev.msg_type, "headers");
     BOOST_CHECK_EQUAL(ev.size_bytes, 162000);
     BOOST_CHECK_EQUAL(ev.received_us, 1234567890123);
@@ -373,8 +475,7 @@ BOOST_AUTO_TEST_CASE(message_event_fields)
 
 BOOST_AUTO_TEST_CASE(block_validated_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
+    uint256 hash{"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"};
     
     BlockValidatedEvent ev{
         .hash = hash,
@@ -395,9 +496,8 @@ BOOST_AUTO_TEST_CASE(block_validated_event_fields)
 
 BOOST_AUTO_TEST_CASE(tx_admission_event_fields)
 {
-    uint256 txid, wtxid;
-    txid.SetHex("abc123");
-    wtxid.SetHex("def456");
+    uint256 txid{uint256::FromUserHex("abc123").value_or(uint256::ZERO)};
+    uint256 wtxid{uint256::FromUserHex("def456").value_or(uint256::ZERO)};
     
     TxAdmissionEvent ev{
         .txid = txid,
@@ -442,8 +542,7 @@ BOOST_AUTO_TEST_CASE(latency_measurement)
 
 BOOST_AUTO_TEST_CASE(block_announce_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
+    uint256 hash{"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"};
     
     BlockAnnounceEvent ev{
         .hash = hash,
@@ -470,8 +569,7 @@ BOOST_AUTO_TEST_CASE(block_announce_via_enum)
 
 BOOST_AUTO_TEST_CASE(block_request_decision_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("abc123");
+    uint256 hash{uint256::FromUserHex("abc123").value_or(uint256::ZERO)};
     
     BlockRequestDecisionEvent ev{
         .hash = hash,
@@ -495,8 +593,7 @@ BOOST_AUTO_TEST_CASE(block_request_decision_event_fields)
 
 BOOST_AUTO_TEST_CASE(block_in_flight_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("def456");
+    uint256 hash{uint256::FromUserHex("def456").value_or(uint256::ZERO)};
     
     BlockInFlightEvent ev{
         .hash = hash,
@@ -516,8 +613,7 @@ BOOST_AUTO_TEST_CASE(block_in_flight_event_fields)
 
 BOOST_AUTO_TEST_CASE(staller_detected_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("789abc");
+    uint256 hash{uint256::FromUserHex("789abc").value_or(uint256::ZERO)};
     
     StallerDetectedEvent ev{
         .hash = hash,
@@ -537,8 +633,7 @@ BOOST_AUTO_TEST_CASE(staller_detected_event_fields)
 
 BOOST_AUTO_TEST_CASE(compact_block_decision_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("compact123");
+    uint256 hash{uint256::FromUserHex("c01dbee5").value_or(uint256::ZERO)};
     
     CompactBlockDecisionEvent ev{
         .hash = hash,
@@ -560,8 +655,7 @@ BOOST_AUTO_TEST_CASE(compact_block_decision_event_fields)
 
 BOOST_AUTO_TEST_CASE(block_source_resolved_event_fields)
 {
-    uint256 hash;
-    hash.SetHex("resolved789");
+    uint256 hash{uint256::FromUserHex("7e501ved").value_or(uint256::ZERO)};
     
     BlockSourceResolvedEvent ev{
         .hash = hash,
@@ -673,9 +767,8 @@ BOOST_AUTO_TEST_CASE(compact_block_action_enum)
 BOOST_AUTO_TEST_CASE(block_request_decision_parallel_download)
 {
     // Test BlockRequestDecisionEvent with ParallelDownload reason (used in SendMessages)
-    uint256 hash;
-    hash.SetHex("sendmsg123");
-    
+    uint256 hash{uint256::FromUserHex("5e7d123").value_or(uint256::ZERO)};
+
     BlockRequestDecisionEvent ev{
         .hash = hash,
         .peer_id = 25,
@@ -701,8 +794,7 @@ BOOST_AUTO_TEST_CASE(block_request_decision_parallel_download)
 BOOST_AUTO_TEST_CASE(block_inflight_timeout_event)
 {
     // Test BlockInFlightEvent with Timeout action (used in SendMessages timeout branch)
-    uint256 hash;
-    hash.SetHex("timeout456");
+    uint256 hash{uint256::FromUserHex("7e456").value_or(uint256::ZERO)};
     
     BlockInFlightEvent ev{
         .hash = hash,
@@ -723,8 +815,7 @@ BOOST_AUTO_TEST_CASE(block_inflight_timeout_event)
 BOOST_AUTO_TEST_CASE(staller_detected_timeout_disconnect)
 {
     // Test StallerDetectedEvent for timeout disconnect (used in SendMessages stall timeout)
-    uint256 hash;
-    hash.SetHex("stalltimeout789");
+    uint256 hash{uint256::FromUserHex("57a770").value_or(uint256::ZERO)};
     
     StallerDetectedEvent ev{
         .hash = hash,
@@ -745,8 +836,7 @@ BOOST_AUTO_TEST_CASE(staller_detected_timeout_disconnect)
 BOOST_AUTO_TEST_CASE(staller_detected_stall_started)
 {
     // Test StallerDetectedEvent for stall started (used in SendMessages stall start)
-    uint256 hash;
-    hash.SetHex("stallstart123");
+    uint256 hash{uint256::FromUserHex("57a115").value_or(uint256::ZERO)};
     
     StallerDetectedEvent ev{
         .hash = hash,

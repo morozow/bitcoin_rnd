@@ -24,12 +24,14 @@ namespace node {
  * MUST NOT modify any state or affect consensus decisions.
  */
 
-/** Message received event */
+/** Message received event (1:1 with net:inbound_message USDT tracepoint) */
 struct MessageEvent {
     int64_t peer_id;
-    std::string msg_type;  // Owning copy for async safety
-    size_t size_bytes;
-    int64_t received_us;  // Monotonic timestamp in microseconds
+    std::string addr;       // peer m_addr_name (matches USDT arg2)
+    std::string conn_type;  // peer ConnectionTypeAsString (matches USDT arg3)
+    std::string msg_type;   // Owning copy for async safety (USDT arg4)
+    size_t size_bytes;      // USDT arg5
+    int64_t received_us;    // Monotonic timestamp in microseconds
 };
 
 /** Headers received event */
@@ -190,6 +192,182 @@ struct BlockSourceResolvedEvent {
     int64_t timestamp_us;
 };
 
+// ============================================================================
+// Additional events for full eBPF tracepoint coverage
+// ============================================================================
+
+/** Transaction removed from mempool (mempool:removed tracepoint equivalent) */
+struct TxRemovedEvent {
+    uint256 txid;
+    std::string reason;
+    size_t vsize;
+    int64_t fee;
+    int64_t entry_time;
+    int64_t timestamp_us;
+};
+
+/** Transaction replaced in mempool (mempool:replaced tracepoint equivalent) */
+struct TxReplacedEvent {
+    uint256 replaced_txid;
+    size_t replaced_vsize;
+    int64_t replaced_fee;
+    int64_t replaced_entry_time;
+    uint256 replacement_txid;
+    size_t replacement_vsize;
+    int64_t replacement_fee;
+    int64_t timestamp_us;
+};
+
+/** Transaction rejected from mempool (mempool:rejected tracepoint equivalent) */
+struct TxRejectedEvent {
+    uint256 txid;
+    std::string reason;
+    int64_t timestamp_us;
+};
+
+/** UTXO cache flush event (utxocache:flush tracepoint equivalent) */
+struct UTXOCacheFlushEvent {
+    int64_t duration_us;
+    int mode;
+    int64_t coins_count;
+    int64_t coins_mem_usage;
+    bool is_flush_for_prune;
+    int64_t timestamp_us;
+};
+
+/** P2P connection event (net:inbound_connection / net:outbound_connection equivalent) */
+struct PeerConnectionEvent {
+    int64_t peer_id;
+    std::string addr;
+    std::string conn_type;
+    int network;
+    bool inbound;
+    uint64_t existing_connections;  // total_in or total_out as appropriate
+    int64_t timestamp_us;
+};
+
+/** P2P closed connection event (net:closed_connection tracepoint equivalent) */
+struct PeerClosedEvent {
+    int64_t peer_id;
+    std::string addr;
+    std::string conn_type;
+    int network;
+    int64_t time_established; // seconds (from std::chrono::seconds)
+    int64_t timestamp_us;
+};
+
+/** P2P evicted inbound connection event (net:evicted_inbound_connection tracepoint equivalent) */
+struct PeerEvictedEvent {
+    int64_t peer_id;
+    std::string addr;
+    std::string conn_type;
+    int network;
+    int64_t time_established; // seconds
+    int64_t timestamp_us;
+};
+
+/** P2P misbehaving connection event (net:misbehaving_connection tracepoint equivalent) */
+struct PeerMisbehavingEvent {
+    int64_t peer_id;
+    std::string message;
+    int64_t timestamp_us;
+};
+
+/** P2P outbound message event (net:outbound_message tracepoint equivalent) */
+struct OutboundMessageEvent {
+    int64_t peer_id;
+    std::string addr;
+    std::string conn_type;
+    std::string msg_type;
+    size_t size_bytes;
+    int64_t timestamp_us;
+};
+
+/** Mempool added event (mempool:added tracepoint equivalent).
+ *  Separate from TxAdmissionEvent so the USDT-mirror path is 1:1 with USDT. */
+struct MempoolAddedEvent {
+    uint256 txid;
+    size_t vsize;
+    int64_t fee;
+    int64_t timestamp_us;
+};
+
+/** Block connected event (validation:block_connected tracepoint equivalent). */
+struct BlockConnectedEvent {
+    uint256 hash;
+    int height;
+    size_t tx_count;
+    int64_t inputs_count;
+    int64_t sigops_cost;
+    int64_t duration_ns;
+    int64_t timestamp_us;
+};
+
+/** UTXO cache add event (utxocache:add tracepoint equivalent) */
+struct UTXOCacheAddEvent {
+    uint256 txid;
+    uint32_t vout;
+    uint32_t height;
+    int64_t value;
+    bool is_coinbase;
+    int64_t timestamp_us;
+};
+
+/** UTXO cache spent event (utxocache:spent tracepoint equivalent) */
+struct UTXOCacheSpentEvent {
+    uint256 txid;
+    uint32_t vout;
+    uint32_t height;
+    int64_t value;
+    bool is_coinbase;
+    int64_t timestamp_us;
+};
+
+/** UTXO cache uncache event (utxocache:uncache tracepoint equivalent) */
+struct UTXOCacheUncacheEvent {
+    uint256 txid;
+    uint32_t vout;
+    uint32_t height;
+    int64_t value;
+    bool is_coinbase;
+    int64_t timestamp_us;
+};
+
+/** Coin selection: selected_coins event (coin_selection:selected_coins tracepoint) */
+struct CoinSelectionSelectedCoinsEvent {
+    std::string wallet_name;
+    std::string algorithm;
+    int64_t target;
+    int64_t waste;
+    int64_t selected_value;
+    int64_t timestamp_us;
+};
+
+/** Coin selection: normal_create_tx_internal (coin_selection:normal_create_tx_internal tracepoint) */
+struct CoinSelectionNormalCreateTxEvent {
+    std::string wallet_name;
+    bool success;
+    int64_t fee;
+    int32_t change_pos;
+    int64_t timestamp_us;
+};
+
+/** Coin selection: attempting_aps_create_tx (coin_selection:attempting_aps_create_tx tracepoint) */
+struct CoinSelectionAttemptingApsEvent {
+    std::string wallet_name;
+    int64_t timestamp_us;
+};
+
+/** Coin selection: aps_create_tx_internal (coin_selection:aps_create_tx_internal tracepoint) */
+struct CoinSelectionApsCreateTxEvent {
+    std::string wallet_name;
+    bool use_aps;
+    bool success;
+    int64_t fee;
+    int32_t change_pos;
+    int64_t timestamp_us;
+};
+
 /**
  * @brief stdio_bus mode enum
  */
@@ -294,6 +472,54 @@ public:
 
     /** Called when block source is resolved (block received) */
     virtual void OnBlockSourceResolved(const BlockSourceResolvedEvent& event) = 0;
+
+    // Additional hooks for full eBPF tracepoint coverage
+    virtual void OnTxRemoved(const TxRemovedEvent& event) = 0;
+    virtual void OnTxReplaced(const TxReplacedEvent& event) = 0;
+    virtual void OnTxRejected(const TxRejectedEvent& event) = 0;
+    virtual void OnUTXOCacheFlush(const UTXOCacheFlushEvent& event) = 0;
+    virtual void OnPeerConnection(const PeerConnectionEvent& event) = 0;
+
+    // ========== Full USDT tracepoint parity ==========
+
+    /** Called when peer connection is closed (net:closed_connection) */
+    virtual void OnPeerClosed(const PeerClosedEvent& event) = 0;
+
+    /** Called when inbound peer is evicted (net:evicted_inbound_connection) */
+    virtual void OnPeerEvicted(const PeerEvictedEvent& event) = 0;
+
+    /** Called when a peer is marked misbehaving (net:misbehaving_connection) */
+    virtual void OnPeerMisbehaving(const PeerMisbehavingEvent& event) = 0;
+
+    /** Called when an outbound P2P message is sent (net:outbound_message) */
+    virtual void OnOutboundMessage(const OutboundMessageEvent& event) = 0;
+
+    /** Called on successful mempool acceptance (mempool:added) */
+    virtual void OnMempoolAdded(const MempoolAddedEvent& event) = 0;
+
+    /** Called after a block is connected (validation:block_connected) */
+    virtual void OnBlockConnected(const BlockConnectedEvent& event) = 0;
+
+    /** Called when a coin is added to UTXO cache (utxocache:add) */
+    virtual void OnUTXOCacheAdd(const UTXOCacheAddEvent& event) = 0;
+
+    /** Called when a coin is spent in UTXO cache (utxocache:spent) */
+    virtual void OnUTXOCacheSpent(const UTXOCacheSpentEvent& event) = 0;
+
+    /** Called when a coin is uncached from UTXO cache (utxocache:uncache) */
+    virtual void OnUTXOCacheUncache(const UTXOCacheUncacheEvent& event) = 0;
+
+    /** Called when wallet selects coins (coin_selection:selected_coins) */
+    virtual void OnCoinSelectionSelectedCoins(const CoinSelectionSelectedCoinsEvent& event) = 0;
+
+    /** Called after normal create tx (coin_selection:normal_create_tx_internal) */
+    virtual void OnCoinSelectionNormalCreateTx(const CoinSelectionNormalCreateTxEvent& event) = 0;
+
+    /** Called when wallet attempts APS variant (coin_selection:attempting_aps_create_tx) */
+    virtual void OnCoinSelectionAttemptingAps(const CoinSelectionAttemptingApsEvent& event) = 0;
+
+    /** Called after APS create tx (coin_selection:aps_create_tx_internal) */
+    virtual void OnCoinSelectionApsCreateTx(const CoinSelectionApsCreateTxEvent& event) = 0;
 };
 
 /**
@@ -321,6 +547,26 @@ public:
     void OnStallerDetected(const StallerDetectedEvent&) override {}
     void OnCompactBlockDecision(const CompactBlockDecisionEvent&) override {}
     void OnBlockSourceResolved(const BlockSourceResolvedEvent&) override {}
+    void OnTxRemoved(const TxRemovedEvent&) override {}
+    void OnTxReplaced(const TxReplacedEvent&) override {}
+    void OnTxRejected(const TxRejectedEvent&) override {}
+    void OnUTXOCacheFlush(const UTXOCacheFlushEvent&) override {}
+    void OnPeerConnection(const PeerConnectionEvent&) override {}
+
+    // Full USDT tracepoint parity
+    void OnPeerClosed(const PeerClosedEvent&) override {}
+    void OnPeerEvicted(const PeerEvictedEvent&) override {}
+    void OnPeerMisbehaving(const PeerMisbehavingEvent&) override {}
+    void OnOutboundMessage(const OutboundMessageEvent&) override {}
+    void OnMempoolAdded(const MempoolAddedEvent&) override {}
+    void OnBlockConnected(const BlockConnectedEvent&) override {}
+    void OnUTXOCacheAdd(const UTXOCacheAddEvent&) override {}
+    void OnUTXOCacheSpent(const UTXOCacheSpentEvent&) override {}
+    void OnUTXOCacheUncache(const UTXOCacheUncacheEvent&) override {}
+    void OnCoinSelectionSelectedCoins(const CoinSelectionSelectedCoinsEvent&) override {}
+    void OnCoinSelectionNormalCreateTx(const CoinSelectionNormalCreateTxEvent&) override {}
+    void OnCoinSelectionAttemptingAps(const CoinSelectionAttemptingApsEvent&) override {}
+    void OnCoinSelectionApsCreateTx(const CoinSelectionApsCreateTxEvent&) override {}
 };
 
 /**
@@ -333,6 +579,29 @@ inline int64_t GetMonotonicTimeUs() {
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
 }
+
+// ============================================================================
+// Global hooks accessor
+// ============================================================================
+//
+// For tracepoints that fire from code outside of PeerManager (net.cpp,
+// validation.cpp, coins.cpp, wallet/spend.cpp, etc.), there is no natural
+// dependency-injection path to pass the StdioBusHooks pointer. We therefore
+// provide a tiny global accessor, following the same pattern as the USDT
+// semaphores themselves (which are also global).
+//
+// The accessor is read-mostly and lock-free after init: the pointer is
+// installed once during startup (AppInitMain) and cleared during shutdown.
+//
+// All callers MUST check `hooks && hooks->Enabled()` before constructing
+// event structs, to keep the USDT-off code path allocation-free.
+
+/** Install the global stdio_bus hooks instance (called once during init). */
+void SetGlobalStdioBusHooks(std::shared_ptr<StdioBusHooks> hooks);
+
+/** Get the global stdio_bus hooks instance. Returns nullptr if not installed.
+ *  Safe to call from any thread; returns a snapshot shared_ptr. */
+std::shared_ptr<StdioBusHooks> GetGlobalStdioBusHooks();
 
 } // namespace node
 

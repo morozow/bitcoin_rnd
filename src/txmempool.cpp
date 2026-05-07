@@ -11,6 +11,7 @@
 #include <consensus/consensus.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <node/stdio_bus_hooks.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <random.h>
@@ -258,6 +259,17 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
         entry.GetTxSize(),
         entry.GetFee()
     );
+
+    // stdio_bus USDT-mirror (mempool:added)
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::MempoolAddedEvent ev{
+            .txid = entry.GetTx().GetHash().ToUint256(),
+            .vsize = static_cast<size_t>(entry.GetTxSize()),
+            .fee = entry.GetFee(),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnMempoolAdded(ev);
+    }
 }
 
 void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
@@ -280,6 +292,21 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
         it->GetFee(),
         std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(it->GetTime()).count()
     );
+
+    // stdio_bus USDT-mirror (mempool:removed) — 1:1 with USDT, including
+    // fee/entry_time which the CValidationInterface callback does not expose.
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::TxRemovedEvent ev{
+            .txid = it->GetTx().GetHash().ToUint256(),
+            .reason = RemovalReasonToString(reason),
+            .vsize = static_cast<size_t>(it->GetTxSize()),
+            .fee = it->GetFee(),
+            .entry_time = static_cast<int64_t>(
+                std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(it->GetTime()).count()),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnTxRemoved(ev);
+    }
 
     for (const CTxIn& txin : it->GetTx().vin)
         mapNextTx.erase(txin.prevout);

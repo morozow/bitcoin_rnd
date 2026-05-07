@@ -1,0 +1,10 @@
+build/
+cmake-build-debug/
+.git/
+*.o
+*.a
+*.so
+*.dylib
+node_modules/
+.ai/node_modules/
+ai_collegue/node_modules/

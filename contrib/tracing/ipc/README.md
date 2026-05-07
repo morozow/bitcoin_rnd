@@ -1,32 +1,100 @@
 # IPC-based Tracing Workers
 
-These scripts are IPC equivalents of the eBPF/USDT tracing scripts in `contrib/tracing/`.
-They receive events via stdin (NDJSON) through stdio_bus IPC instead of kernel tracepoints.
+Parallel stdio_bus IPC consumers for **every** Bitcoin Core USDT tracepoint.
+These are functional equivalents of the `contrib/tracing/*.py` / `*.bt` scripts
+but receive events over a `stdin` NDJSON stream published by the in-process
+`StdioBusSdkHooks` instead of kernel eBPF/USDT.
 
-## Advantages over eBPF/USDT
+Why two paths?
+--------------
+Operators see measurably different per-event latency between the eBPF/USDT
+pipeline and the stdio_bus IPC pipeline on different hosts. To reason about it
+we collect *both* streams during the same workload and join them by a stable
+event identifier.
+
+Coverage (1:1 with every USDT tracepoint in Bitcoin Core)
+---------------------------------------------------------
+
+| Tracepoint                               | IPC worker                                   |
+|------------------------------------------|----------------------------------------------|
+| `net:inbound_message`                    | `p2p_traffic.py`                             |
+| `net:outbound_message`                   | `p2p_traffic.py`                             |
+| `net:inbound_connection`                 | `p2p_connections.py`                         |
+| `net:outbound_connection`                | `p2p_connections.py`                         |
+| `net:closed_connection`                  | `p2p_connections.py`                         |
+| `net:evicted_inbound_connection`         | `p2p_connections.py`                         |
+| `net:misbehaving_connection`             | `p2p_connections.py`                         |
+| `mempool:added`                          | `mempool_monitor.py`                         |
+| `mempool:removed`                        | `mempool_monitor.py`                         |
+| `mempool:replaced`                       | `mempool_monitor.py`                         |
+| `mempool:rejected`                       | `mempool_monitor.py`                         |
+| `validation:block_connected`             | `connectblock_benchmark.py`                  |
+| `utxocache:add`                          | `utxocache_utxos.py`                         |
+| `utxocache:spent`                        | `utxocache_utxos.py`                         |
+| `utxocache:uncache`                      | `utxocache_utxos.py`                         |
+| `utxocache:flush`                        | `utxocache_flush.py`                         |
+| `coin_selection:selected_coins`          | `coin_selection.py`                          |
+| `coin_selection:normal_create_tx_*`      | `coin_selection.py`                          |
+| `coin_selection:attempting_aps_create_tx`| `coin_selection.py`                          |
+| `coin_selection:aps_create_tx_internal`  | `coin_selection.py`                          |
+| **all of the above**                     | `all_events_recorder.py` (catch-all CSV)     |
+
+Advantages over eBPF/USDT
+-------------------------
 - No root privileges required
 - No BCC/bpftrace dependency
 - Cross-platform (Linux, macOS, Windows)
 - Testable in CI without VM
 - Typed interface (JSON, extensible to Cap'n Proto)
 
-## Scripts
+Event format
+------------
+Each line on `stdin` is a JSON-RPC envelope produced by
+`StdioBusSdkHooks::SerializeEvent()`:
 
-| IPC Worker | eBPF Equivalent | Events Used |
-|---|---|---|
-| `mempool_monitor.py` | `../mempool_monitor.py` | mempool:added, removed, replaced, rejected |
-| `connectblock_benchmark.py` | `../connectblock_benchmark.bt` | validation:block_connected |
-| `p2p_traffic.py` | `../log_p2p_traffic.bt` + `../p2p_monitor.py` | net:inbound_message, outbound_message |
-| `utxocache_flush.py` | `../log_utxocache_flush.py` | utxocache:flush |
+```json
+{"jsonrpc":"2.0","method":"stdio_bus.event","params":{"type":"mempool_added","txid":"...","vsize":250,"fee":1234,"timestamp_us":178...}}
+```
 
-## Usage
+Workers use the `params.type` field to dispatch events. A small number of
+older workers also accept legacy `method` strings (`mempool.tx_added`, …).
 
-These are stdio_bus workers — they read NDJSON from stdin:
+Standalone tests
+----------------
+Each worker can be exercised with a manually piped event:
 
 ```bash
-# Standalone test (pipe events manually):
-echo '{"method":"block.validated","params":{"height":100,"received_us":1000,"validated_us":2000,"accepted":true,"tx_count":5}}' | python3 connectblock_benchmark.py
-
-# Via stdio_bus (automatic — configured in stdiobus_trace.json):
-bitcoind -regtest -stdiobus=shadow
+echo '{"params":{"type":"peer_closed","peer_id":4,"addr":"1.2.3.4:8333","conn_type":"outbound-full-relay","network":0,"time_established":120,"timestamp_us":100}}' \
+    | ./p2p_connections.py
 ```
+
+End-to-end (stdio_bus pipeline)
+-------------------------------
+
+```bash
+bitcoind -regtest -stdiobus=shadow
+# bitcoind spawns the worker from contrib/perf/stdiobus_trace.json
+```
+
+Latency benchmarking
+--------------------
+To compare the eBPF pipeline against stdio_bus IPC for any tracepoint on the
+same workload:
+
+```bash
+# Terminal 1 — capture stdio_bus IPC events into CSV.
+bitcoind -regtest -stdiobus=shadow \
+    2>&1 | python3 contrib/tracing/ipc/all_events_recorder.py --csv /tmp/ipc.csv &
+
+# Terminal 2 — capture eBPF events into CSV.
+sudo python3 contrib/tracing/all_tracepoints_ebpf_recorder.py \
+    --pid $(pidof bitcoind) --csv /tmp/ebpf.csv &
+
+# Run a representative workload (wallet tx, block accept, etc.).
+# Stop both recorders, then join and report percentiles:
+python3 contrib/tracing/compare_latency.py \
+    --ipc /tmp/ipc.csv --ebpf /tmp/ebpf.csv --out /tmp/merged.csv
+```
+
+`compare_latency.py` writes per-event deltas and prints a P50/P95/P99 table
+grouped by tracepoint name.

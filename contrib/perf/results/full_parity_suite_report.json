@@ -1,0 +1,9 @@
+{
+  "block_benchmark": {
+    "description": "Block validation timing (validation:block_connected)",
+    "overhead_pct": -4.358162723691868,
+    "baseline_blocks_per_s": 22.33571155386175,
+    "shadow_blocks_per_s": 24.216581936905538,
+    "pass": true
+  }
+}

@@ -89,6 +89,26 @@ public:
     void OnStallerDetected(const StallerDetectedEvent& ev) override;
     void OnCompactBlockDecision(const CompactBlockDecisionEvent& ev) override;
     void OnBlockSourceResolved(const BlockSourceResolvedEvent& ev) override;
+    void OnTxRemoved(const TxRemovedEvent& ev) override;
+    void OnTxReplaced(const TxReplacedEvent& ev) override;
+    void OnTxRejected(const TxRejectedEvent& ev) override;
+    void OnUTXOCacheFlush(const UTXOCacheFlushEvent& ev) override;
+    void OnPeerConnection(const PeerConnectionEvent& ev) override;
+
+    // Full USDT tracepoint parity
+    void OnPeerClosed(const PeerClosedEvent& ev) override;
+    void OnPeerEvicted(const PeerEvictedEvent& ev) override;
+    void OnPeerMisbehaving(const PeerMisbehavingEvent& ev) override;
+    void OnOutboundMessage(const OutboundMessageEvent& ev) override;
+    void OnMempoolAdded(const MempoolAddedEvent& ev) override;
+    void OnBlockConnected(const BlockConnectedEvent& ev) override;
+    void OnUTXOCacheAdd(const UTXOCacheAddEvent& ev) override;
+    void OnUTXOCacheSpent(const UTXOCacheSpentEvent& ev) override;
+    void OnUTXOCacheUncache(const UTXOCacheUncacheEvent& ev) override;
+    void OnCoinSelectionSelectedCoins(const CoinSelectionSelectedCoinsEvent& ev) override;
+    void OnCoinSelectionNormalCreateTx(const CoinSelectionNormalCreateTxEvent& ev) override;
+    void OnCoinSelectionAttemptingAps(const CoinSelectionAttemptingApsEvent& ev) override;
+    void OnCoinSelectionApsCreateTx(const CoinSelectionApsCreateTxEvent& ev) override;
 
     // ========== Lifecycle ==========
 
@@ -125,7 +145,27 @@ private:
         BlockInFlightEvent,
         StallerDetectedEvent,
         CompactBlockDecisionEvent,
-        BlockSourceResolvedEvent
+        BlockSourceResolvedEvent,
+        // Full eBPF tracepoint coverage
+        TxRemovedEvent,
+        TxReplacedEvent,
+        TxRejectedEvent,
+        UTXOCacheFlushEvent,
+        PeerConnectionEvent,
+        // Full USDT tracepoint parity
+        PeerClosedEvent,
+        PeerEvictedEvent,
+        PeerMisbehavingEvent,
+        OutboundMessageEvent,
+        MempoolAddedEvent,
+        BlockConnectedEvent,
+        UTXOCacheAddEvent,
+        UTXOCacheSpentEvent,
+        UTXOCacheUncacheEvent,
+        CoinSelectionSelectedCoinsEvent,
+        CoinSelectionNormalCreateTxEvent,
+        CoinSelectionAttemptingApsEvent,
+        CoinSelectionApsCreateTxEvent
     >;
 
     /** Try to enqueue an event (non-blocking) */

@@ -25,6 +25,7 @@
 #include <netbase.h>
 #include <node/eviction.h>
 #include <node/interface_ui.h>
+#include <node/stdio_bus_hooks.h>
 #include <protocol.h>
 #include <random.h>
 #include <scheduler.h>
@@ -565,6 +566,19 @@ void CNode::CloseSocketDisconnect()
             ConnectionTypeAsString().c_str(),
             ConnectedThroughNetwork(),
             Ticks<std::chrono::seconds>(m_connected));
+
+        // stdio_bus USDT-mirror (net:closed_connection)
+        if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+            node::PeerClosedEvent ev{
+                .peer_id = GetId(),
+                .addr = m_addr_name,
+                .conn_type = ConnectionTypeAsString(),
+                .network = static_cast<int>(ConnectedThroughNetwork()),
+                .time_established = Ticks<std::chrono::seconds>(m_connected),
+                .timestamp_us = node::GetMonotonicTimeUs(),
+            };
+            hooks->OnPeerClosed(ev);
+        }
     }
     m_i2p_sam_session.reset();
 }
@@ -1726,6 +1740,20 @@ bool CConnman::AttemptToEvictConnection()
                 pnode->ConnectionTypeAsString().c_str(),
                 pnode->ConnectedThroughNetwork(),
                 Ticks<std::chrono::seconds>(pnode->m_connected));
+
+            // stdio_bus USDT-mirror (net:evicted_inbound_connection)
+            if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+                node::PeerEvictedEvent ev{
+                    .peer_id = pnode->GetId(),
+                    .addr = pnode->m_addr_name,
+                    .conn_type = pnode->ConnectionTypeAsString(),
+                    .network = static_cast<int>(pnode->ConnectedThroughNetwork()),
+                    .time_established = Ticks<std::chrono::seconds>(pnode->m_connected),
+                    .timestamp_us = node::GetMonotonicTimeUs(),
+                };
+                hooks->OnPeerEvicted(ev);
+            }
+
             pnode->fDisconnect = true;
             return true;
         }
@@ -1866,6 +1894,20 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         pnode->ConnectionTypeAsString().c_str(),
         pnode->ConnectedThroughNetwork(),
         GetNodeCount(ConnectionDirection::In));
+
+    // stdio_bus USDT-mirror (net:inbound_connection)
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::PeerConnectionEvent ev{
+            .peer_id = pnode->GetId(),
+            .addr = pnode->m_addr_name,
+            .conn_type = pnode->ConnectionTypeAsString(),
+            .network = static_cast<int>(pnode->ConnectedThroughNetwork()),
+            .inbound = true,
+            .existing_connections = GetNodeCount(ConnectionDirection::In),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnPeerConnection(ev);
+    }
 
     // We received a new connection, harvest entropy from the time (and our peer count)
     RandAddEvent((uint32_t)id);
@@ -3051,6 +3093,20 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
         pnode->ConnectedThroughNetwork(),
         GetNodeCount(ConnectionDirection::Out));
 
+    // stdio_bus USDT-mirror (net:outbound_connection)
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::PeerConnectionEvent ev{
+            .peer_id = pnode->GetId(),
+            .addr = pnode->m_addr_name,
+            .conn_type = pnode->ConnectionTypeAsString(),
+            .network = static_cast<int>(pnode->ConnectedThroughNetwork()),
+            .inbound = false,
+            .existing_connections = GetNodeCount(ConnectionDirection::Out),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnPeerConnection(ev);
+    }
+
     return true;
 }
 
@@ -4088,6 +4144,19 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
         msg.data.size(),
         msg.data.data()
     );
+
+    // stdio_bus USDT-mirror (net:outbound_message)
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::OutboundMessageEvent ev{
+            .peer_id = pnode->GetId(),
+            .addr = pnode->m_addr_name,
+            .conn_type = pnode->ConnectionTypeAsString(),
+            .msg_type = msg.m_type,
+            .size_bytes = msg.data.size(),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnOutboundMessage(ev);
+    }
 
     size_t nBytesSent = 0;
     {

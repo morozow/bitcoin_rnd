@@ -352,6 +352,93 @@ void StdioBusSdkHooks::OnBlockSourceResolved(const BlockSourceResolvedEvent& ev)
     }
 }
 
+void StdioBusSdkHooks::OnTxRemoved(const TxRemovedEvent& ev)
+{
+    if (!Enabled()) return;
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+void StdioBusSdkHooks::OnTxReplaced(const TxReplacedEvent& ev)
+{
+    if (!Enabled()) return;
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+void StdioBusSdkHooks::OnTxRejected(const TxRejectedEvent& ev)
+{
+    if (!Enabled()) return;
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+void StdioBusSdkHooks::OnUTXOCacheFlush(const UTXOCacheFlushEvent& ev)
+{
+    if (!Enabled()) return;
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+void StdioBusSdkHooks::OnPeerConnection(const PeerConnectionEvent& ev)
+{
+    if (!Enabled()) return;
+    int64_t start = GetMonotonicTimeUs();
+    bool enqueued = TryEnqueue(ev);
+    int64_t latency = GetMonotonicTimeUs() - start;
+    m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed);
+    m_stats.events_total.fetch_add(1, std::memory_order_relaxed);
+    if (!enqueued) m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ============================================================================
+// Full USDT tracepoint parity (new hooks)
+// ============================================================================
+
+#define STDIOBUS_DEFINE_HOOK(Method, EventType) \
+    void StdioBusSdkHooks::Method(const EventType& ev) \
+    { \
+        if (!Enabled()) return; \
+        int64_t start = GetMonotonicTimeUs(); \
+        bool enqueued = TryEnqueue(ev); \
+        int64_t latency = GetMonotonicTimeUs() - start; \
+        m_stats.last_hook_latency_us.store(latency, std::memory_order_relaxed); \
+        m_stats.events_total.fetch_add(1, std::memory_order_relaxed); \
+        if (!enqueued) m_stats.events_dropped.fetch_add(1, std::memory_order_relaxed); \
+    }
+
+STDIOBUS_DEFINE_HOOK(OnPeerClosed, PeerClosedEvent)
+STDIOBUS_DEFINE_HOOK(OnPeerEvicted, PeerEvictedEvent)
+STDIOBUS_DEFINE_HOOK(OnPeerMisbehaving, PeerMisbehavingEvent)
+STDIOBUS_DEFINE_HOOK(OnOutboundMessage, OutboundMessageEvent)
+STDIOBUS_DEFINE_HOOK(OnMempoolAdded, MempoolAddedEvent)
+STDIOBUS_DEFINE_HOOK(OnBlockConnected, BlockConnectedEvent)
+STDIOBUS_DEFINE_HOOK(OnUTXOCacheAdd, UTXOCacheAddEvent)
+STDIOBUS_DEFINE_HOOK(OnUTXOCacheSpent, UTXOCacheSpentEvent)
+STDIOBUS_DEFINE_HOOK(OnUTXOCacheUncache, UTXOCacheUncacheEvent)
+STDIOBUS_DEFINE_HOOK(OnCoinSelectionSelectedCoins, CoinSelectionSelectedCoinsEvent)
+STDIOBUS_DEFINE_HOOK(OnCoinSelectionNormalCreateTx, CoinSelectionNormalCreateTxEvent)
+STDIOBUS_DEFINE_HOOK(OnCoinSelectionAttemptingAps, CoinSelectionAttemptingApsEvent)
+STDIOBUS_DEFINE_HOOK(OnCoinSelectionApsCreateTx, CoinSelectionApsCreateTxEvent)
+
+#undef STDIOBUS_DEFINE_HOOK
+
 // ============================================================================
 // Queue Operations
 // ============================================================================
@@ -442,6 +529,8 @@ std::string StdioBusSdkHooks::SerializeEvent(const Event& ev) const
         if constexpr (std::is_same_v<T, MessageEvent>) {
             ss << "\"type\":\"message\","
                << "\"peer_id\":" << arg.peer_id << ","
+               << "\"addr\":\"" << arg.addr << "\","
+               << "\"conn_type\":\"" << arg.conn_type << "\","
                << "\"msg_type\":\"" << arg.msg_type << "\","
                << "\"size_bytes\":" << arg.size_bytes << ","
                << "\"received_us\":" << arg.received_us;
@@ -588,6 +677,157 @@ std::string StdioBusSdkHooks::SerializeEvent(const Event& ev) const
                << "\"request_to_receive_us\":" << arg.request_to_receive_us << ","
                << "\"total_requests\":" << arg.total_requests << ","
                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, TxRemovedEvent>) {
+            ss << "\"type\":\"tx_removed\","
+                << "\"txid\":\"" << arg.txid.GetHex() << "\","
+                << "\"reason\":\"" << arg.reason << "\","
+                << "\"vsize\":" << arg.vsize << ","
+                << "\"fee\":" << arg.fee << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, TxReplacedEvent>) {
+            ss << "\"type\":\"tx_replaced\","
+                << "\"replaced_txid\":\"" << arg.replaced_txid.GetHex() << "\","
+                << "\"replaced_vsize\":" << arg.replaced_vsize << ","
+                << "\"replaced_fee\":" << arg.replaced_fee << ","
+                << "\"replacement_txid\":\"" << arg.replacement_txid.GetHex() << "\","
+                << "\"replacement_vsize\":" << arg.replacement_vsize << ","
+                << "\"replacement_fee\":" << arg.replacement_fee << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, TxRejectedEvent>) {
+            ss << "\"type\":\"tx_rejected\","
+                << "\"txid\":\"" << arg.txid.GetHex() << "\","
+                << "\"reason\":\"" << arg.reason << "\","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, UTXOCacheFlushEvent>) {
+            ss << "\"type\":\"utxocache_flush\","
+                << "\"duration_us\":" << arg.duration_us << ","
+                << "\"mode\":" << arg.mode << ","
+                << "\"coins_count\":" << arg.coins_count << ","
+                << "\"coins_mem_usage\":" << arg.coins_mem_usage << ","
+                << "\"is_flush_for_prune\":" << (arg.is_flush_for_prune ? "true" : "false") << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, PeerConnectionEvent>) {
+            ss << "\"type\":\"peer_connection\","
+                << "\"peer_id\":" << arg.peer_id << ","
+                << "\"addr\":\"" << arg.addr << "\","
+                << "\"conn_type\":\"" << arg.conn_type << "\","
+                << "\"network\":" << arg.network << ","
+                << "\"inbound\":" << (arg.inbound ? "true" : "false") << ","
+                << "\"existing_connections\":" << arg.existing_connections << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, PeerClosedEvent>) {
+            ss << "\"type\":\"peer_closed\","
+                << "\"peer_id\":" << arg.peer_id << ","
+                << "\"addr\":\"" << arg.addr << "\","
+                << "\"conn_type\":\"" << arg.conn_type << "\","
+                << "\"network\":" << arg.network << ","
+                << "\"time_established\":" << arg.time_established << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, PeerEvictedEvent>) {
+            ss << "\"type\":\"peer_evicted\","
+                << "\"peer_id\":" << arg.peer_id << ","
+                << "\"addr\":\"" << arg.addr << "\","
+                << "\"conn_type\":\"" << arg.conn_type << "\","
+                << "\"network\":" << arg.network << ","
+                << "\"time_established\":" << arg.time_established << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, PeerMisbehavingEvent>) {
+            ss << "\"type\":\"peer_misbehaving\","
+                << "\"peer_id\":" << arg.peer_id << ","
+                << "\"message\":\"" << arg.message << "\","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, OutboundMessageEvent>) {
+            ss << "\"type\":\"outbound_message\","
+                << "\"peer_id\":" << arg.peer_id << ","
+                << "\"addr\":\"" << arg.addr << "\","
+                << "\"conn_type\":\"" << arg.conn_type << "\","
+                << "\"msg_type\":\"" << arg.msg_type << "\","
+                << "\"size_bytes\":" << arg.size_bytes << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, MempoolAddedEvent>) {
+            ss << "\"type\":\"mempool_added\","
+                << "\"txid\":\"" << arg.txid.GetHex() << "\","
+                << "\"vsize\":" << arg.vsize << ","
+                << "\"fee\":" << arg.fee << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, BlockConnectedEvent>) {
+            ss << "\"type\":\"block_connected\","
+                << "\"hash\":\"" << arg.hash.GetHex() << "\","
+                << "\"height\":" << arg.height << ","
+                << "\"tx_count\":" << arg.tx_count << ","
+                << "\"inputs_count\":" << arg.inputs_count << ","
+                << "\"sigops_cost\":" << arg.sigops_cost << ","
+                << "\"duration_ns\":" << arg.duration_ns << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, UTXOCacheAddEvent>) {
+            ss << "\"type\":\"utxocache_add\","
+                << "\"txid\":\"" << arg.txid.GetHex() << "\","
+                << "\"vout\":" << arg.vout << ","
+                << "\"height\":" << arg.height << ","
+                << "\"value\":" << arg.value << ","
+                << "\"is_coinbase\":" << (arg.is_coinbase ? "true" : "false") << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, UTXOCacheSpentEvent>) {
+            ss << "\"type\":\"utxocache_spent\","
+                << "\"txid\":\"" << arg.txid.GetHex() << "\","
+                << "\"vout\":" << arg.vout << ","
+                << "\"height\":" << arg.height << ","
+                << "\"value\":" << arg.value << ","
+                << "\"is_coinbase\":" << (arg.is_coinbase ? "true" : "false") << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, UTXOCacheUncacheEvent>) {
+            ss << "\"type\":\"utxocache_uncache\","
+                << "\"txid\":\"" << arg.txid.GetHex() << "\","
+                << "\"vout\":" << arg.vout << ","
+                << "\"height\":" << arg.height << ","
+                << "\"value\":" << arg.value << ","
+                << "\"is_coinbase\":" << (arg.is_coinbase ? "true" : "false") << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, CoinSelectionSelectedCoinsEvent>) {
+            ss << "\"type\":\"coin_selection_selected_coins\","
+                << "\"wallet_name\":\"" << arg.wallet_name << "\","
+                << "\"algorithm\":\"" << arg.algorithm << "\","
+                << "\"target\":" << arg.target << ","
+                << "\"waste\":" << arg.waste << ","
+                << "\"selected_value\":" << arg.selected_value << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, CoinSelectionNormalCreateTxEvent>) {
+            ss << "\"type\":\"coin_selection_normal_create_tx\","
+                << "\"wallet_name\":\"" << arg.wallet_name << "\","
+                << "\"success\":" << (arg.success ? "true" : "false") << ","
+                << "\"fee\":" << arg.fee << ","
+                << "\"change_pos\":" << arg.change_pos << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, CoinSelectionAttemptingApsEvent>) {
+            ss << "\"type\":\"coin_selection_attempting_aps\","
+                << "\"wallet_name\":\"" << arg.wallet_name << "\","
+                << "\"timestamp_us\":" << arg.timestamp_us;
+        }
+        else if constexpr (std::is_same_v<T, CoinSelectionApsCreateTxEvent>) {
+            ss << "\"type\":\"coin_selection_aps_create_tx\","
+                << "\"wallet_name\":\"" << arg.wallet_name << "\","
+                << "\"use_aps\":" << (arg.use_aps ? "true" : "false") << ","
+                << "\"success\":" << (arg.success ? "true" : "false") << ","
+                << "\"fee\":" << arg.fee << ","
+                << "\"change_pos\":" << arg.change_pos << ","
+                << "\"timestamp_us\":" << arg.timestamp_us;
         }
     }, ev);
     

@@ -2053,6 +2053,16 @@ void PeerManagerImpl::Misbehaving(Peer& peer, const std::string& message)
         peer.m_id,
         message.c_str()
     );
+
+    // stdio_bus USDT-mirror (net:misbehaving_connection)
+    if (m_opts.stdio_bus_hooks && m_opts.stdio_bus_hooks->Enabled()) {
+        node::PeerMisbehavingEvent ev{
+            .peer_id = peer.m_id,
+            .message = message,
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        m_opts.stdio_bus_hooks->OnPeerMisbehaving(ev);
+    }
 }
 
 void PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidationState& state,
@@ -5435,10 +5445,12 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
         msg.m_recv.data()
     );
 
-    // stdio_bus hook: OnMessage (shadow mode observability)
+    // stdio_bus hook: OnMessage (1:1 mirror of net:inbound_message USDT tracepoint)
     if (m_opts.stdio_bus_hooks->Enabled()) {
         node::MessageEvent ev{
             .peer_id = node.GetId(),
+            .addr = node.m_addr_name,
+            .conn_type = node.ConnectionTypeAsString(),
             .msg_type = msg.m_type,
             .size_bytes = msg.m_recv.size(),
             .received_us = node::GetMonotonicTimeUs()

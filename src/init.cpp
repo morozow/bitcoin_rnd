@@ -409,6 +409,9 @@ void Shutdown(NodeContext& node)
         if (node.validation_signals) node.validation_signals->UnregisterValidationInterface(g_stdio_bus_observer.get());
         g_stdio_bus_observer.reset();
     }
+    // Clear global hooks so USDT-mirror call sites become no-ops before the
+    // SDK hooks shared_ptr is destroyed together with PeerManager's Options.
+    node::SetGlobalStdioBusHooks(nullptr);
 
     node.chain_clients.clear();
     if (node.validation_signals) {
@@ -670,6 +673,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-limitclustersize=<n>", strprintf("Do not accept transactions whose virtual size with all in-mempool connected transactions exceeds <n> kilobytes (default: %u)", DEFAULT_CLUSTER_SIZE_LIMIT_KVB), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-capturemessages", "Capture all P2P messages to disk", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-stdiobus=<mode>", "Enable stdio_bus integration for observability (off, shadow, active; default: off). Shadow mode observes without behavior change.", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-stdiobusconfig=<path>", "Path to stdio_bus JSON config file (pools/workers).", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-mocktime=<n>", "Replace actual time with " + UNIX_EPOCH_TIME + " (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-maxsigcachesize=<n>", strprintf("Limit sum of signature cache and script execution cache sizes to <n> MiB (default: %u)", DEFAULT_VALIDATION_CACHE_BYTES >> 20), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-maxtipage=<n>",
@@ -1839,8 +1843,13 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // Register stdio_bus validation observer if enabled
     if (peerman_opts.stdio_bus_mode != node::StdioBusMode::Off) {
         // Replace NoOp hooks with real SDK hooks using config file
+        std::string stdio_bus_config = args.GetArg("-stdiobusconfig", "");
+        if (stdio_bus_config.empty()) {
+            // Default: look for config relative to source tree
+            stdio_bus_config = (gArgs.GetDataDirNet().parent_path().parent_path() / "contrib" / "perf" / "stdiobus_trace.json").string();
+        }
         peerman_opts.stdio_bus_hooks = node::MakeStdioBusSdkHooks(
-            "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/perf/stdiobus_trace.json",
+            stdio_bus_config,
             peerman_opts.stdio_bus_mode == node::StdioBusMode::Shadow);
         if (!peerman_opts.stdio_bus_hooks) {
             LogError("stdio_bus: Failed to create SDK hooks, falling back to NoOp");
@@ -1848,6 +1857,11 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         }
         g_stdio_bus_observer = std::make_unique<node::StdioBusValidationObserver>(peerman_opts.stdio_bus_hooks);
         validation_signals.RegisterValidationInterface(g_stdio_bus_observer.get());
+
+        // Install the global hooks accessor for USDT-mirror call sites in
+        // net.cpp, validation.cpp, coins.cpp, wallet/spend.cpp, etc.
+        node::SetGlobalStdioBusHooks(peerman_opts.stdio_bus_hooks);
+
         LogInfo("stdio_bus validation observer registered");
     }
 
