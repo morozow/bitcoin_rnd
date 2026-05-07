@@ -1,0 +1,84 @@
+# Dockerfile.reindex_benchmark
+#
+# Builds a reproducible benchmark environment for measuring tracing overhead
+# on Bitcoin Core using real mainnet blocks via `bitcoind -reindex`.
+#
+# Compares four conditions:
+#   1. Baseline (no tracing)
+#   2. eBPF (bpftrace attached to all 20 USDT probes)
+#   3. IPC (stdio_bus shadow mode with all 6 workers)
+#   4. Cap'n Proto simulation (calibrated overhead worker)
+#
+# REQUIREMENTS:
+#   - Docker must be run with --privileged for eBPF kernel access
+#   - Mainnet block files (blk*.dat) must be mounted at /blocks
+#
+# BUILD:
+#   docker build -f contrib/perf/docker/Dockerfile.reindex_benchmark \
+#       -t bitcoin-reindex-benchmark .
+#
+# RUN:
+#   docker run --privileged --rm \
+#       -v /path/to/mainnet/blocks:/blocks:ro \
+#       bitcoin-reindex-benchmark --stop-height=20000
+#
+# BLOCK DATA:
+#   Mount a directory containing mainnet blk*.dat files (at least blk00000.dat
+#   through blk00005.dat for 10,000+ blocks). These can be obtained from a
+#   fully-synced Bitcoin Core node's blocks/ directory, or from a partial sync
+#   stopped after the desired height.
+
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build dependencies for Bitcoin Core + runtime dependencies for benchmark
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    # Build tools
+    cmake make g++ pkg-config \
+    # Bitcoin Core dependencies
+    libboost-dev libboost-test-dev libevent-dev libsqlite3-dev \
+    # USDT/SystemTap support (required for eBPF tracepoints)
+    systemtap-sdt-dev \
+    # eBPF tracing
+    bpftrace \
+    # Python 3.10+ for benchmark orchestrator and IPC workers
+    python3 \
+    # Process management utilities (ps, pgrep, etc.)
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the full source tree
+COPY . /bitcoin
+
+# Copy the real libstdio_bus.a for Linux arm64
+COPY contrib/perf/docker/libstdio_bus_linux_arm64.a /bitcoin/lib/libstdio_bus.a
+
+WORKDIR /bitcoin
+
+# Build bitcoind with USDT probes + real stdio_bus library
+RUN cmake -B /bitcoin/build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_GUI=OFF \
+    -DWITH_ZMQ=OFF \
+    -DENABLE_IPC=OFF \
+    -DWITH_USDT=ON \
+    -DENABLE_WALLET=ON \
+    -DBUILD_TESTS=OFF \
+    -DBUILD_BENCH=OFF \
+    -DSTDIO_BUS_LIB_OVERRIDE=/bitcoin/lib/libstdio_bus.a \
+    && cmake --build /bitcoin/build -j$(nproc) --target bitcoind bitcoin-cli
+
+# Verify USDT probes are present in the binary
+RUN echo "USDT probes:" && readelf -n /bitcoin/build/bin/bitcoind | grep -c "NT_STAPSDT"
+
+# Ensure IPC workers and capnproto_sim_worker are executable
+RUN chmod +x /bitcoin/contrib/tracing/ipc/*.py
+
+# Volume mount point for mainnet block files (read-only from host)
+VOLUME /blocks
+
+# Working directory for per-condition datadirs
+RUN mkdir -p /benchmark
+
+ENTRYPOINT ["python3", "/bitcoin/contrib/perf/run_reindex_benchmark.py"]
