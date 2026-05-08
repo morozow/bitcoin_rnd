@@ -190,6 +190,9 @@ def run_ipc(datadir, blocks):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--blocks", type=int, default=500)
+    ap.add_argument("--only", type=str, default=None,
+                    choices=["baseline", "ebpf", "ipc"],
+                    help="Run only one condition (for cache-fair measurement)")
     args = ap.parse_args()
 
     print("=" * 70)
@@ -197,15 +200,20 @@ def main():
     print(f"Blocks per condition: {args.blocks}")
     print("=" * 70)
 
+    all_conditions = [
+        ("baseline", run_baseline),
+        ("ebpf", run_ebpf),
+        ("ipc", run_ipc),
+    ]
+
+    if args.only:
+        all_conditions = [(n, r) for n, r in all_conditions if n == args.only]
+
     results = {}
 
     with tempfile.TemporaryDirectory(prefix="btc_bench_") as tmpdir:
         # Each condition gets a fresh datadir
-        for condition, runner in [
-            ("baseline", run_baseline),
-            ("ebpf", run_ebpf),
-            ("ipc", run_ipc),
-        ]:
+        for condition, runner in all_conditions:
             datadir = os.path.join(tmpdir, condition)
             os.makedirs(datadir, exist_ok=True)
             elapsed = runner(datadir, args.blocks)
