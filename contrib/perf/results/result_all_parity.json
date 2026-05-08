@@ -2,21 +2,21 @@
   "baseline": {
     "mode": "off",
     "blocks": 500,
-    "time_s": 26.844027042388916,
-    "blocks_per_s": 21.164343679104714,
+    "time_s": 24.86934995651245,
+    "blocks_per_s": 23.762302374604275,
     "memory_mb": 0.0006256103515625
   },
   "shadow": {
     "mode": "shadow",
     "blocks": 500,
-    "time_s": 29.28312087059021,
-    "blocks_per_s": 19.18068766753704,
+    "time_s": 25.94699001312256,
+    "blocks_per_s": 22.73976405274115,
     "memory_mb": 0.0006256103515625
   },
   "overhead": {
-    "time_pct": 9.086169613634217,
+    "time_pct": 4.333205566267362,
     "memory_pct": 0.0,
-    "cpu_pct": 9.086169613634217
+    "cpu_pct": 4.333205566267362
   },
   "pass": false
 }

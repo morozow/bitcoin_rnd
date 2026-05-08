@@ -231,7 +231,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/stdio_bus_hooks.cpp
   node/stdio_bus_observer.cpp
   node/stdio_bus_sdk_hooks.cpp
-  ${PROJECT_SOURCE_DIR}/src/stdio_bus/src/bus.cpp
   node/psbt.cpp
   node/timeoffsets.cpp
   node/transaction.cpp
@@ -292,23 +291,18 @@ target_link_libraries(bitcoin_node
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
 
-# stdio_bus SDK integration
-target_include_directories(bitcoin_node PRIVATE
-  ${PROJECT_SOURCE_DIR}/src/stdio_bus/include
+# stdio_bus SDK integration via FetchContent
+include(FetchContent)
+FetchContent_Declare(
+  stdiobus
+  GIT_REPOSITORY https://github.com/stdiobus/stdiobus-cpp.git
+  GIT_TAG v1.0.0
 )
-if(STDIO_BUS_LIB_OVERRIDE AND EXISTS "${STDIO_BUS_LIB_OVERRIDE}")
-  target_link_libraries(bitcoin_node PRIVATE ${STDIO_BUS_LIB_OVERRIDE})
-  message(STATUS "stdio_bus: Linked override from ${STDIO_BUS_LIB_OVERRIDE}")
-else()
-  set(STDIO_BUS_LIB_PATH "$ENV{HOME}/Projects/Target-Insight-Function/stdio-Bus/stdiobus-sdk/stdiobus-rust/crates/stdiobus-backend-native/lib/aarch64-apple-darwin/libstdio_bus.a")
-  if(EXISTS ${STDIO_BUS_LIB_PATH})
-    target_link_libraries(bitcoin_node PRIVATE ${STDIO_BUS_LIB_PATH})
-    message(STATUS "stdio_bus: Linked real libstdio_bus.a")
-  else()
-    target_sources(bitcoin_node PRIVATE ${PROJECT_SOURCE_DIR}/src/stdio_bus/src/stub.c)
-    message(STATUS "stdio_bus: Using stub (libstdio_bus.a not found)")
-  endif()
-endif()
+set(STDIOBUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(STDIOBUS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(stdiobus)
+target_link_libraries(bitcoin_node PRIVATE stdiobus::stdiobus)
+message(STATUS "stdio_bus: Using stdiobus-cpp v1.0.0 via FetchContent")
 if(WITH_EMBEDDED_ASMAP)
   target_compile_definitions(bitcoin_node PRIVATE ENABLE_EMBEDDED_ASMAP=1)
   include(TargetDataSources)

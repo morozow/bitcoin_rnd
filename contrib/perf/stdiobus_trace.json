@@ -7,6 +7,52 @@
         "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/connectblock_benchmark.py"
       ],
       "instances": 1
+    },
+    {
+      "id": "mempool-mon",
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/mempool_monitor.py"
+      ],
+      "instances": 1
+    },
+    {
+      "id": "p2p-traffic",
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/p2p_traffic.py"
+      ],
+      "instances": 1
+    },
+    {
+      "id": "p2p-connections",
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/p2p_connections.py",
+        "--csv",
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/perf/results/p2p_connections_all.csv"
+      ],
+      "instances": 1
+    },
+    {
+      "id": "utxocache-utxos",
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/utxocache_utxos.py",
+        "--csv",
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/perf/results/utxocache_utxos_all.csv"
+      ],
+      "instances": 1
+    },
+    {
+      "id": "coin-selection",
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+      "args": [
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/tracing/ipc/coin_selection.py",
+        "--csv",
+        "/Users/etc/Projects/Target-Insight-Function/stdio-Bus/experimental_RnD/bitcoin/contrib/perf/results/coin_selection_all.csv"
+      ],
+      "instances": 1
     }
   ]
 }
