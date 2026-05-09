@@ -35,7 +35,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Build dependencies for Bitcoin Core + runtime dependencies for benchmark
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     # Build tools
-    cmake make g++ pkg-config \
+    cmake make g++ pkg-config git ca-certificates \
     # Bitcoin Core dependencies
     libboost-dev libboost-test-dev libevent-dev libsqlite3-dev \
     # USDT/SystemTap support (required for eBPF tracepoints)
@@ -51,12 +51,9 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 # Copy the full source tree
 COPY . /bitcoin
 
-# Copy the real libstdio_bus.a for Linux arm64
-COPY contrib/perf/docker/libstdio_bus_linux_arm64.a /bitcoin/lib/libstdio_bus.a
-
 WORKDIR /bitcoin
 
-# Build bitcoind with USDT probes + real stdio_bus library
+# Build bitcoind with USDT probes + stdio_bus via FetchContent
 RUN cmake -B /bitcoin/build \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_GUI=OFF \
@@ -66,7 +63,6 @@ RUN cmake -B /bitcoin/build \
     -DENABLE_WALLET=ON \
     -DBUILD_TESTS=OFF \
     -DBUILD_BENCH=OFF \
-    -DSTDIO_BUS_LIB_OVERRIDE=/bitcoin/lib/libstdio_bus.a \
     && cmake --build /bitcoin/build -j$(nproc) --target bitcoind bitcoin-cli
 
 # Verify USDT probes are present in the binary

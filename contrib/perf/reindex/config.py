@@ -25,7 +25,7 @@ class Condition(Enum):
 
 # Valid stop_height bounds
 MIN_STOP_HEIGHT = 10_000
-MAX_STOP_HEIGHT = 50_000
+MAX_STOP_HEIGHT = 850_000
 
 
 @dataclass

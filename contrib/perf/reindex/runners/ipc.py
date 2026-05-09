@@ -252,6 +252,7 @@ class IpcRunner:
             "-daemon=0",
             "-server=0",
             "-listen=0",
+            "-noconnect",
             "-txindex=0",
             "-printtoconsole=0",
         ] + extra_args
