@@ -1,9 +1,0 @@
-{
-  "all_parity": {
-    "description": "All parity workers running simultaneously",
-    "overhead_pct": 4.333205566267362,
-    "baseline_blocks_per_s": 23.762302374604275,
-    "shadow_blocks_per_s": 22.73976405274115,
-    "pass": false
-  }
-}

@@ -12,6 +12,7 @@ from .base import ConditionRunner, ReindexResult, TracingMetrics, run_reindex
 from .baseline import BaselineRunner
 from .capnproto_sim import CapnProtoSimRunner
 from .ebpf import EbpfRunner
+from .ebpf_full import EbpfFullRunner
 from .ipc import IpcRunner
 from .raw_ipc import RawIpcRunner
 
@@ -20,6 +21,7 @@ __all__ = [
     "CapnProtoSimRunner",
     "ConditionRunner",
     "EbpfRunner",
+    "EbpfFullRunner",
     "IpcRunner",
     "RawIpcRunner",
     "ReindexResult",

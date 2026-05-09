@@ -40,7 +40,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     libboost-dev libboost-test-dev libevent-dev libsqlite3-dev \
     # USDT/SystemTap support (required for eBPF tracepoints)
     systemtap-sdt-dev \
-    # eBPF tracing
+    # eBPF tracing (bpftrace handles both counter and printf/perf modes)
     bpftrace \
     # Python 3.10+ for benchmark orchestrator and IPC workers
     python3 \

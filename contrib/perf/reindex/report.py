@@ -193,8 +193,8 @@ def format_table(report: BenchmarkReport) -> str:
 
     # Build rows
     rows: list[list[str]] = []
-    # Order: baseline first, then ebpf, ipc, raw_ipc, capnproto
-    condition_order = ["baseline", "ebpf", "ipc", "raw_ipc", "capnproto"]
+    # Order: baseline first, then ebpf, ebpf_full, ipc, raw_ipc, capnproto
+    condition_order = ["baseline", "ebpf", "ebpf_full", "ipc", "raw_ipc", "capnproto"]
 
     for cond_name in condition_order:
         result = report.conditions.get(cond_name)

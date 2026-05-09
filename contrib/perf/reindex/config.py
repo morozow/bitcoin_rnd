@@ -19,6 +19,7 @@ class Condition(Enum):
 
     BASELINE = "baseline"
     EBPF = "ebpf"
+    EBPF_FULL = "ebpf_full"
     IPC = "ipc"
     RAW_IPC = "raw_ipc"
     CAPNPROTO = "capnproto"

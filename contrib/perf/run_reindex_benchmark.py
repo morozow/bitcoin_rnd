@@ -58,6 +58,7 @@ from reindex.runners import (
     BaselineRunner,
     CapnProtoSimRunner,
     EbpfRunner,
+    EbpfFullRunner,
     IpcRunner,
     RawIpcRunner,
 )
@@ -122,11 +123,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--conditions",
         type=str,
-        default="baseline,ebpf,ipc,raw_ipc,capnproto",
+        default="baseline,ebpf,ebpf_full,ipc,raw_ipc,capnproto",
         help=(
             "Comma-separated list of conditions to run. "
-            "Options: baseline,ebpf,ipc,raw_ipc,capnproto "
-            "(default: baseline,ebpf,ipc,raw_ipc,capnproto)"
+            "Options: baseline,ebpf,ebpf_full,ipc,raw_ipc,capnproto "
+            "(default: baseline,ebpf,ebpf_full,ipc,raw_ipc,capnproto)"
         ),
     )
     parser.add_argument(
@@ -356,6 +357,8 @@ def _create_runner(condition: Condition, config: BenchmarkConfig):
         return BaselineRunner(bitcoind_path=bitcoind_path)
     elif condition == Condition.EBPF:
         return EbpfRunner(bitcoind_path=bitcoind_path)
+    elif condition == Condition.EBPF_FULL:
+        return EbpfFullRunner(bitcoind_path=bitcoind_path)
     elif condition == Condition.IPC:
         return IpcRunner(bitcoind_path=bitcoind_path)
     elif condition == Condition.RAW_IPC:
