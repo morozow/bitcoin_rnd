@@ -32,9 +32,10 @@ Block files will be at `/tmp/btc_blocks/blocks/`.
 
 ```bash
 docker run --privileged --rm \
-    -v /tmp/btc_blocks/blocks:/blocks \
+    -v /tmp/btc_blocks/mainnet/blocks:/blocks \
+    -v /sys/kernel/debug:/sys/kernel/debug \
     bitcoin-reindex-benchmark \
-    --block-dir /blocks --stop-height 200000
+    --block-dir /blocks --stop-height 200000 --conditions baseline,ebpf,ipc,raw_ipc
 ```
 
 This runs `bitcoind -reindex -stopatheight=N` under four conditions sequentially, with cache flushes between each:

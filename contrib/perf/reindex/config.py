@@ -20,6 +20,7 @@ class Condition(Enum):
     BASELINE = "baseline"
     EBPF = "ebpf"
     IPC = "ipc"
+    RAW_IPC = "raw_ipc"
     CAPNPROTO = "capnproto"
 
 
@@ -115,12 +116,24 @@ class ReportMetadata:
 def compute_blocks_per_second(blocks: int, elapsed_s: float) -> float:
     """Compute throughput as blocks per second.
 
+    This is a REAL SYSTEM metric: it measures end-to-end wall-clock
+    throughput including all system overhead (startup, shutdown, I/O,
+    cache effects, tracing pipeline). It is NOT a "pure" block
+    processing rate — it reflects what a real operator would observe.
+
+    The measurement includes:
+      - bitcoind process startup and initialization
+      - Block deserialization and validation
+      - UTXO set updates and flushes
+      - Tracing overhead (if any condition is active)
+      - Process shutdown and final flush
+
     Args:
-        blocks: Number of blocks processed.
-        elapsed_s: Elapsed time in seconds (must be positive).
+        blocks: Number of blocks processed (= stop_height for reindex).
+        elapsed_s: Wall-clock elapsed time in seconds (must be positive).
 
     Returns:
-        Blocks per second.
+        Blocks per second (real-system throughput).
 
     Raises:
         ValueError: If elapsed_s <= 0 or blocks < 0.
@@ -136,6 +149,11 @@ def compute_overhead_pct(baseline_time: float, condition_time: float) -> float:
     """Compute overhead percentage relative to baseline.
 
     overhead_pct = ((condition_time - baseline_time) / baseline_time) * 100
+
+    This measures REAL SYSTEM overhead: the additional wall-clock time
+    introduced by the tracing condition compared to the same workload
+    with no tracing. Includes all system-level effects (context switches,
+    pipe I/O, serialization, cache pressure from worker processes, etc.).
 
     Args:
         baseline_time: Baseline elapsed time (must be positive).

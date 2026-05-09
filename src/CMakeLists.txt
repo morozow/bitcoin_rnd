@@ -231,6 +231,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/stdio_bus_hooks.cpp
   node/stdio_bus_observer.cpp
   node/stdio_bus_sdk_hooks.cpp
+  node/stdio_bus_raw_pipe_hooks.cpp
   node/psbt.cpp
   node/timeoffsets.cpp
   node/transaction.cpp

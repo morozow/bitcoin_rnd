@@ -3,11 +3,25 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """
-IPC/stdio_bus condition runner.
+Raw IPC condition runner.
 
-Runs bitcoind -reindex with -stdiobus=shadow and all 6 IPC workers
-processing events via stdio_bus. Measures the overhead of the full
-IPC tracing pipeline on real mainnet blocks.
+Runs bitcoind -reindex with -stdiobus=raw_pipe and all 6 IPC workers
+receiving events via direct Unix pipes (no stdio_bus library).
+
+This isolates the pure IPC overhead:
+  - Event struct construction in C++
+  - JSON serialization (ostringstream)
+  - pipe write() syscall
+  - Worker process read + parse + process
+
+Without:
+  - stdio_bus framing protocol
+  - stdio_bus routing/multiplexing
+  - stdio_bus event loop
+  - stdio_bus worker lifecycle management
+
+The workers are IDENTICAL to the IPC (stdio_bus) condition — same
+scripts, same input format, same processing. Only the transport differs.
 """
 
 import json
@@ -29,75 +43,80 @@ logger = logging.getLogger(__name__)
 # Default path to IPC workers inside Docker container
 DEFAULT_IPC_DIR = Path("/bitcoin/contrib/tracing/ipc")
 
-# The 6 IPC workers that cover all tracepoint subsystems
-IPC_WORKERS = [
+# Same 6 workers as the stdio_bus IPC condition — identical workload
+RAW_IPC_WORKERS = [
     {
         "id": "connectblock-benchmark",
-        "script": "connectblock_benchmark.py",
-        "args": [],
+        "command": "python3",
+        "args": ["connectblock_benchmark.py"],
     },
     {
         "id": "mempool-monitor",
-        "script": "mempool_monitor.py",
-        "args": ["--no-curses"],
+        "command": "python3",
+        "args": ["mempool_monitor.py", "--no-curses"],
     },
     {
         "id": "p2p-traffic",
-        "script": "p2p_traffic.py",
-        "args": ["--log"],
+        "command": "python3",
+        "args": ["p2p_traffic.py", "--log"],
     },
     {
         "id": "p2p-connections",
-        "script": "p2p_connections.py",
-        "args": [],
+        "command": "python3",
+        "args": ["p2p_connections.py"],
     },
     {
         "id": "utxocache-utxos",
-        "script": "utxocache_utxos.py",
-        "args": [],
+        "command": "python3",
+        "args": ["utxocache_utxos.py"],
     },
     {
         "id": "utxocache-flush",
-        "script": "utxocache_flush.py",
-        "args": [],
+        "command": "python3",
+        "args": ["utxocache_flush.py"],
     },
 ]
 
-# Expected number of workers
 EXPECTED_WORKER_COUNT = 6
 
-# Time to wait for workers to start
-WORKER_START_TIMEOUT_S = 10
 
+def _build_raw_pipe_config(ipc_dir: Path) -> dict:
+    """Build the raw pipe configuration (same JSON format as stdiobus_trace.json).
 
-def _build_stdiobus_config(ipc_dir: Path) -> dict:
-    """Build the stdiobus_trace.json configuration for all 6 workers.
+    The raw_pipe C++ implementation reads the same config format but
+    spawns workers via raw fork/exec + pipe instead of stdio_bus.
 
     Args:
         ipc_dir: Directory containing IPC worker scripts.
 
     Returns:
-        Configuration dictionary for -stdiobusconfig.
+        Configuration dictionary.
     """
     pools = []
-    for worker in IPC_WORKERS:
-        script_path = ipc_dir / worker["script"]
+    for worker in RAW_IPC_WORKERS:
+        script_path = ipc_dir / worker["args"][0]
         pool = {
             "id": worker["id"],
-            "command": "python3",
-            "args": [str(script_path)] + worker["args"],
+            "command": worker["command"],
+            "args": [str(script_path)] + worker["args"][1:],
             "instances": 1,
         }
         pools.append(pool)
     return {"pools": pools}
 
 
-class IpcRunner:
-    """IPC condition: stdio_bus shadow mode with all 6 workers.
+class RawIpcRunner:
+    """Raw IPC condition: direct Unix pipes with all 6 workers.
 
-    Runs bitcoind with -stdiobus=shadow and a configuration that
-    launches all 6 IPC workers covering validation, mempool, net,
-    utxocache, and coin_selection subsystems.
+    Runs bitcoind with -stdiobus=raw_pipe and a configuration that
+    spawns all 6 IPC workers via raw fork/exec + pipe. Workers receive
+    the same NDJSON events as in the stdio_bus condition, but without
+    the stdio_bus protocol library in the path.
+
+    This provides the "pure IPC cost" baseline for comparison:
+    - vs baseline: shows the inherent cost of IPC tracing
+    - vs stdio_bus IPC: shows the overhead of the protocol library
+    - vs eBPF: shows IPC vs kernel-side tracing
     """
 
     def __init__(
@@ -105,7 +124,7 @@ class IpcRunner:
         bitcoind_path: Path | None = None,
         ipc_dir: Path | None = None,
     ):
-        """Initialize the IPC runner.
+        """Initialize the raw IPC runner.
 
         Args:
             bitcoind_path: Path to bitcoind binary (uses default if None).
@@ -130,35 +149,28 @@ class IpcRunner:
             block_dir=block_dir,
         )
 
-        # Write stdiobus config into the datadir
-        config = _build_stdiobus_config(self._ipc_dir)
-        self._config_path = self._datadir / "stdiobus_trace.json"
+        # Write raw pipe config (same format as stdiobus_trace.json)
+        config = _build_raw_pipe_config(self._ipc_dir)
+        self._config_path = self._datadir / "raw_pipe_config.json"
         self._config_path.write_text(json.dumps(config, indent=2))
         logger.info(
-            "Wrote stdiobus config with %d workers to %s",
+            "Wrote raw_pipe config with %d workers to %s",
             len(config["pools"]),
             self._config_path,
         )
 
     def start_tracing(self, bitcoind_pid: int) -> None:
-        """No-op for IPC: workers are launched by bitcoind via stdiobus config.
-
-        The stdio_bus subsystem in bitcoind spawns workers automatically
-        based on the -stdiobusconfig file. No external attachment needed.
+        """No-op: workers are spawned by bitcoind's raw_pipe subsystem.
 
         Args:
             bitcoind_pid: PID of the running bitcoind process (unused).
         """
-        # Workers are started by bitcoind's stdio_bus subsystem
-        # Give them a moment to initialize
+        # Workers are started by bitcoind's raw_pipe implementation
+        # (fork/exec at startup). Give them a moment to initialize.
         time.sleep(2)
 
     def verify_tracing_active(self) -> bool:
-        """Verify that IPC workers are running.
-
-        Checks that the expected number of worker processes exist.
-        Since workers are child processes of bitcoind (spawned via
-        stdio_bus), we check for python3 processes with worker script names.
+        """Verify that raw IPC workers are running.
 
         Returns:
             True if workers appear to be running.
@@ -170,7 +182,6 @@ class IpcRunner:
                 text=True,
                 timeout=5,
             )
-            # Count matching PIDs
             pids = [
                 line.strip()
                 for line in result.stdout.strip().split("\n")
@@ -178,7 +189,7 @@ class IpcRunner:
             ]
             worker_count = len(pids)
             if worker_count >= EXPECTED_WORKER_COUNT:
-                logger.info("Verified %d IPC workers running", worker_count)
+                logger.info("Verified %d raw IPC workers running", worker_count)
                 return True
             else:
                 logger.warning(
@@ -186,37 +197,26 @@ class IpcRunner:
                     EXPECTED_WORKER_COUNT,
                     worker_count,
                 )
-                return worker_count > 0  # Partial success
+                return worker_count > 0
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             logger.warning("Could not verify worker processes via pgrep")
-            # If pgrep fails, assume workers are running (they're managed by bitcoind)
             return True
 
     def stop_tracing(self) -> TracingMetrics:
-        """Stop tracing — workers are terminated when bitcoind exits.
-
-        Workers receive EOF on stdin when bitcoind's stdio_bus shuts down,
-        causing them to print summary stats to stderr and exit.
-        Worker stderr is inherited from bitcoind's stderr (standard Unix
-        fork/exec behavior), so all worker output appears in the captured
-        stderr pipe.
+        """Stop tracing — workers exit when pipe is closed (EOF on stdin).
 
         Returns:
-            TracingMetrics (event counts collected from worker output if available).
+            TracingMetrics.
         """
-        # Workers are terminated by bitcoind shutdown (EOF on stdin)
-        # Their stderr output is captured via bitcoind's stderr pipe
-        return TracingMetrics(
-            probe_count=EXPECTED_WORKER_COUNT,
-        )
+        return TracingMetrics(probe_count=EXPECTED_WORKER_COUNT)
 
     def get_bitcoind_args(self) -> list[str]:
-        """Return IPC-specific bitcoind arguments.
+        """Return raw IPC-specific bitcoind arguments.
 
         Returns:
-            Args to enable stdio_bus shadow mode with worker config.
+            Args to enable raw_pipe mode with worker config.
         """
-        args = ["-stdiobus=shadow"]
+        args = ["-stdiobus=raw_pipe"]
         if self._config_path:
             args.append(f"-stdiobusconfig={self._config_path}")
         return args
@@ -224,7 +224,7 @@ class IpcRunner:
     def run(
         self, stop_height: int, baseline_elapsed: float | None = None
     ) -> ConditionResult:
-        """Execute the IPC condition and return results.
+        """Execute the raw IPC condition and return results.
 
         Args:
             stop_height: Block height at which to stop reindex.
@@ -235,7 +235,7 @@ class IpcRunner:
         """
         if self._datadir is None:
             return ConditionResult(
-                name="ipc",
+                name="raw_ipc",
                 elapsed_s=0,
                 blocks_processed=0,
                 blocks_per_second=0,
@@ -244,7 +244,6 @@ class IpcRunner:
 
         extra_args = self.get_bitcoind_args()
 
-        # Start bitcoind with stdio_bus shadow mode
         cmd = [
             str(self._bitcoind_path),
             f"-datadir={self._datadir}",
@@ -258,7 +257,10 @@ class IpcRunner:
             "-printtoconsole=0",
         ] + extra_args
 
-        logger.info("Starting bitcoind for IPC condition with %d workers", EXPECTED_WORKER_COUNT)
+        logger.info(
+            "Starting bitcoind for raw IPC condition with %d workers",
+            EXPECTED_WORKER_COUNT,
+        )
         start_time = time.monotonic()
 
         try:
@@ -269,19 +271,19 @@ class IpcRunner:
             )
         except OSError as e:
             return ConditionResult(
-                name="ipc",
+                name="raw_ipc",
                 elapsed_s=0,
                 blocks_processed=0,
                 blocks_per_second=0,
                 error=f"Failed to start bitcoind: {e}",
             )
 
-        # Workers are spawned by bitcoind's stdio_bus subsystem
+        # Workers are spawned by bitcoind's raw_pipe subsystem
         self.start_tracing(self._bitcoind_proc.pid)
 
         if not self.verify_tracing_active():
             logger.warning(
-                "IPC worker verification incomplete, continuing anyway"
+                "Raw IPC worker verification incomplete, continuing anyway"
             )
 
         # Wait for bitcoind to complete reindex
@@ -291,7 +293,7 @@ class IpcRunner:
             self._bitcoind_proc.kill()
             self._bitcoind_proc.wait(timeout=10)
             return ConditionResult(
-                name="ipc",
+                name="raw_ipc",
                 elapsed_s=time.monotonic() - start_time,
                 blocks_processed=0,
                 blocks_per_second=0,
@@ -300,43 +302,27 @@ class IpcRunner:
 
         elapsed = time.monotonic() - start_time
 
-        # Collect metrics from worker output (stderr contains worker summaries)
+        # Collect metrics from worker stderr output
         metrics = self.stop_tracing()
         stderr_text = stderr.decode("utf-8", errors="replace")
 
-        # Log stderr size for diagnostics — if empty, workers may not have run
+        # Log stderr diagnostics
         stderr_lines = [l for l in stderr_text.split("\n") if l.strip()]
         logger.info(
-            "IPC stderr captured: %d bytes, %d non-empty lines",
+            "Raw IPC stderr: %d bytes, %d non-empty lines",
             len(stderr_text),
             len(stderr_lines),
         )
-        if not stderr_lines:
-            logger.warning(
-                "IPC stderr is EMPTY — workers may not have produced output. "
-                "Check that stdiobus workers inherit parent stderr."
-            )
-        else:
-            # Log last 5 lines for diagnostics
-            for line in stderr_lines[-5:]:
-                logger.debug("IPC stderr tail: %s", line[:200])
 
-        # Try to parse event counts from worker JSON summaries in stderr
+        # Parse event counts (same parser as IPC condition)
         event_counts = _parse_worker_event_counts(stderr_text)
         if event_counts:
             metrics.event_counts = event_counts
-        else:
-            logger.warning(
-                "No event counts parsed from IPC stderr. "
-                "Expected JSON lines with 'counts' or 'total_blocks' keys. "
-                "Stderr sample (first 500 chars): %s",
-                stderr_text[:500],
-            )
 
         if self._bitcoind_proc.returncode != 0:
             error_msg = stderr_text.strip()
             return ConditionResult(
-                name="ipc",
+                name="raw_ipc",
                 elapsed_s=elapsed,
                 blocks_processed=0,
                 blocks_per_second=0,
@@ -350,7 +336,7 @@ class IpcRunner:
             overhead = compute_overhead_pct(baseline_elapsed, elapsed)
 
         logger.info(
-            "IPC completed: %.2fs, %d blocks, %.2f blocks/s, overhead=%.2f%%",
+            "Raw IPC completed: %.2fs, %d blocks, %.2f blocks/s, overhead=%.2f%%",
             elapsed,
             stop_height,
             bps,
@@ -358,7 +344,7 @@ class IpcRunner:
         )
 
         return ConditionResult(
-            name="ipc",
+            name="raw_ipc",
             elapsed_s=elapsed,
             blocks_processed=stop_height,
             blocks_per_second=bps,
@@ -370,23 +356,7 @@ class IpcRunner:
 def _parse_worker_event_counts(stderr_text: str) -> dict[str, int]:
     """Parse event counts from worker JSON summaries in stderr.
 
-    Workers print JSON summaries to stderr on exit. This function
-    attempts to find and aggregate those counts.
-
-    Supported formats:
-      1. {"counts": {"key": N, ...}}  — utxocache_utxos, capnproto_sim
-      2. {"total_blocks": N, ...}     — connectblock_benchmark.py
-      3. {"added": N, "removed": N, ...} — mempool_monitor.py
-      4. {"inbound": N, "outbound": N}   — p2p_traffic.py
-      5. {"flushes": N}                  — utxocache_flush.py
-      6. {"total": N, "by_type": {...}}  — all_events_recorder.py
-      7. [trace_consumer] DONE: N events in Xs — trace_consumer.py
-
-    Args:
-        stderr_text: Combined stderr output from bitcoind + workers.
-
-    Returns:
-        Aggregated event counts across all workers.
+    Identical to the IPC runner parser — workers produce the same output.
     """
     counts: dict[str, int] = {}
 
@@ -395,68 +365,29 @@ def _parse_worker_event_counts(stderr_text: str) -> dict[str, int]:
         if not line:
             continue
 
-        # Try JSON parsing for lines that look like JSON
         if line.startswith("{"):
             try:
                 data = json.loads(line)
                 if not isinstance(data, dict):
                     continue
 
-                # Format 1: {"counts": {"key": N, ...}} — utxocache_utxos, capnproto_sim
                 if "counts" in data and isinstance(data["counts"], dict):
                     for key, value in data["counts"].items():
                         if isinstance(value, int):
                             counts[key] = counts.get(key, 0) + value
-                # Format 2: {"total_blocks": N, ...} — connectblock_benchmark
                 elif "total_blocks" in data:
                     counts["validation_block_connected"] = (
                         counts.get("validation_block_connected", 0)
                         + data.get("total_blocks", 0)
                     )
-                    if "total_transactions" in data:
-                        counts["total_transactions"] = (
-                            counts.get("total_transactions", 0)
-                            + data.get("total_transactions", 0)
-                        )
-                    if "total_inputs" in data:
-                        counts["total_inputs"] = (
-                            counts.get("total_inputs", 0)
-                            + data.get("total_inputs", 0)
-                        )
-                # Format 6: {"total": N, "by_type": {...}} — all_events_recorder
-                elif "total" in data and "by_type" in data:
-                    counts["ipc_recorder_total"] = (
-                        counts.get("ipc_recorder_total", 0)
-                        + data.get("total", 0)
-                    )
-                    if isinstance(data.get("by_type"), dict):
-                        for key, value in data["by_type"].items():
-                            if isinstance(value, int):
-                                counts[key] = counts.get(key, 0) + value
                 else:
-                    # Formats 3-5: flat dicts with integer values
-                    # {"added": N, "removed": N, ...} — mempool_monitor
-                    # {"inbound": N, "outbound": N} — p2p_traffic
-                    # {"flushes": N} — utxocache_flush
-                    # Heuristic: if all values are ints, treat as event counts
                     all_int_values = all(
                         isinstance(v, int) for v in data.values()
                     )
                     if all_int_values and data:
                         for key, value in data.items():
                             counts[key] = counts.get(key, 0) + value
-
             except (json.JSONDecodeError, TypeError):
                 continue
-
-        # Also try to parse trace_consumer-style output:
-        # [trace_consumer] DONE: 12345 events in 10.5s
-        elif "DONE:" in line and "events" in line:
-            import re
-            m = re.search(r"DONE:\s*(\d+)\s*events", line)
-            if m:
-                counts["trace_consumer_events"] = (
-                    counts.get("trace_consumer_events", 0) + int(m.group(1))
-                )
 
     return counts

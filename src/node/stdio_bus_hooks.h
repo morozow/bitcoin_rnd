@@ -372,19 +372,21 @@ struct CoinSelectionApsCreateTxEvent {
  * @brief stdio_bus mode enum
  */
 enum class StdioBusMode {
-    Off = 0,     ///< Disabled (default)
-    Shadow = 1,  ///< Observe only, no behavior change
-    Active = 2   ///< Enable optimizations (future)
+    Off = 0,      ///< Disabled (default)
+    Shadow = 1,   ///< Observe only via stdio_bus protocol, no behavior change
+    Active = 2,   ///< Enable optimizations (future)
+    RawPipe = 3   ///< Raw Unix pipe IPC (no stdio_bus library, same workers)
 };
 
 /**
  * @brief Parse stdio_bus mode from string
- * @param str Mode string ("off", "shadow", "active")
+ * @param str Mode string ("off", "shadow", "active", "raw_pipe")
  * @return Parsed mode, or Off if invalid
  */
 inline StdioBusMode ParseStdioBusMode(std::string_view str) {
     if (str == "shadow") return StdioBusMode::Shadow;
     if (str == "active") return StdioBusMode::Active;
+    if (str == "raw_pipe") return StdioBusMode::RawPipe;
     return StdioBusMode::Off;
 }
 
@@ -395,6 +397,7 @@ inline std::string_view StdioBusModeToString(StdioBusMode mode) {
     switch (mode) {
         case StdioBusMode::Shadow: return "shadow";
         case StdioBusMode::Active: return "active";
+        case StdioBusMode::RawPipe: return "raw_pipe";
         default: return "off";
     }
 }
