@@ -27,3 +27,11 @@ target/
 /guix-build-*
 
 /ci/scratch/
+
+# Benchmark runtime artifacts
+contrib/perf/results/
+contrib/perf/__pycache__/
+contrib/tracing/ipc/__pycache__/
+sandbox/
+.idea/
+.hypothesis/

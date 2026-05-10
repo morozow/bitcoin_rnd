@@ -58,6 +58,9 @@
 #include <node/mempool_persist_args.h>
 #include <node/miner.h>
 #include <node/peerman_args.h>
+#include <node/stdio_bus_observer.h>
+#include <node/stdio_bus_sdk_hooks.h>
+#include <node/stdio_bus_raw_pipe_hooks.h>
 #include <policy/feerate.h>
 #include <policy/fees/block_policy_estimator.h>
 #include <policy/fees/block_policy_estimator_args.h>
@@ -209,6 +212,9 @@ static void RemovePidFile(const ArgsManager& args)
 }
 
 static std::optional<util::SignalInterrupt> g_shutdown;
+
+// Global stdio_bus validation observer (similar to g_zmq_notification_interface)
+static std::unique_ptr<node::StdioBusValidationObserver> g_stdio_bus_observer;
 
 void InitContext(NodeContext& node)
 {
@@ -398,6 +404,15 @@ void Shutdown(NodeContext& node)
         g_zmq_notification_interface.reset();
     }
 #endif
+
+    // Cleanup stdio_bus observer
+    if (g_stdio_bus_observer) {
+        if (node.validation_signals) node.validation_signals->UnregisterValidationInterface(g_stdio_bus_observer.get());
+        g_stdio_bus_observer.reset();
+    }
+    // Clear global hooks so USDT-mirror call sites become no-ops before the
+    // SDK hooks shared_ptr is destroyed together with PeerManager's Options.
+    node::SetGlobalStdioBusHooks(nullptr);
 
     node.chain_clients.clear();
     if (node.validation_signals) {
@@ -658,6 +673,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-limitclustercount=<n>", strprintf("Do not accept transactions into mempool which are directly or indirectly connected to <n> or more other unconfirmed transactions (default: %u, maximum: %u)", DEFAULT_CLUSTER_LIMIT, MAX_CLUSTER_COUNT_LIMIT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-limitclustersize=<n>", strprintf("Do not accept transactions whose virtual size with all in-mempool connected transactions exceeds <n> kilobytes (default: %u)", DEFAULT_CLUSTER_SIZE_LIMIT_KVB), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-capturemessages", "Capture all P2P messages to disk", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-stdiobus=<mode>", "Enable stdio_bus integration for observability (off, shadow, active, raw_pipe; default: off). Shadow mode uses stdio_bus protocol. Raw_pipe mode uses direct Unix pipes (no library).", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-stdiobusconfig=<path>", "Path to stdio_bus JSON config file (pools/workers).", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-mocktime=<n>", "Replace actual time with " + UNIX_EPOCH_TIME + " (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-maxsigcachesize=<n>", strprintf("Limit sum of signature cache and script execution cache sizes to <n> MiB (default: %u)", DEFAULT_VALIDATION_CACHE_BYTES >> 20), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-maxtipage=<n>",
@@ -1823,6 +1840,46 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         validation_signals.RegisterValidationInterface(g_zmq_notification_interface.get());
     }
 #endif
+
+    // Register stdio_bus validation observer if enabled
+    if (peerman_opts.stdio_bus_mode != node::StdioBusMode::Off) {
+        // Replace NoOp hooks with real hooks using config file
+        std::string stdio_bus_config = args.GetArg("-stdiobusconfig", "");
+        if (stdio_bus_config.empty()) {
+            // Default: look for config relative to source tree
+            stdio_bus_config = (gArgs.GetDataDirNet().parent_path().parent_path() / "contrib" / "perf" / "stdiobus_trace.json").string();
+        }
+
+        if (peerman_opts.stdio_bus_mode == node::StdioBusMode::RawPipe) {
+            // Raw pipe mode: direct fork/exec + pipe, no stdio_bus library
+            peerman_opts.stdio_bus_hooks = node::MakeRawPipeHooks(
+                stdio_bus_config,
+                /*shadow_mode=*/true);
+            if (!peerman_opts.stdio_bus_hooks) {
+                LogError("raw_pipe: Failed to create hooks, falling back to NoOp");
+                peerman_opts.stdio_bus_hooks = std::make_shared<node::NoOpStdioBusHooks>();
+            }
+        } else {
+            // Shadow/Active mode: use stdio_bus SDK
+            peerman_opts.stdio_bus_hooks = node::MakeStdioBusSdkHooks(
+                stdio_bus_config,
+                peerman_opts.stdio_bus_mode == node::StdioBusMode::Shadow);
+            if (!peerman_opts.stdio_bus_hooks) {
+                LogError("stdio_bus: Failed to create SDK hooks, falling back to NoOp");
+                peerman_opts.stdio_bus_hooks = std::make_shared<node::NoOpStdioBusHooks>();
+            }
+        }
+
+        g_stdio_bus_observer = std::make_unique<node::StdioBusValidationObserver>(peerman_opts.stdio_bus_hooks);
+        validation_signals.RegisterValidationInterface(g_stdio_bus_observer.get());
+
+        // Install the global hooks accessor for USDT-mirror call sites in
+        // net.cpp, validation.cpp, coins.cpp, wallet/spend.cpp, etc.
+        node::SetGlobalStdioBusHooks(peerman_opts.stdio_bus_hooks);
+
+        LogInfo("stdio_bus validation observer registered (mode=%s)",
+                std::string(node::StdioBusModeToString(peerman_opts.stdio_bus_mode)));
+    }
 
     // ********************************************************* Step 7: load block chain
 

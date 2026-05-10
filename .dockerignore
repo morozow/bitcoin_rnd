@@ -1,0 +1,15 @@
+build/
+cmake-build-debug/
+cmake-build-release/
+.git/
+.idea/
+.hypothesis/
+.pytest_cache/
+sandbox/
+results/
+*.o
+*.a
+*.so
+*.dylib
+__pycache__/
+*.pyc

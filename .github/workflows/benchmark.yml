@@ -1,0 +1,303 @@
+name: Tracing Overhead Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_type:
+        description: 'EC2 instance type'
+        required: false
+        default: 'c6i.2xlarge'
+      stop_height:
+        description: 'Block height to stop at'
+        required: false
+        default: '200000'
+      conditions:
+        description: 'Comma-separated conditions to benchmark'
+        required: false
+        default: 'baseline,ebpf,ebpf_full,ipc,raw_ipc'
+      commit_results:
+        description: 'Commit results JSON to repo'
+        required: false
+        default: 'true'
+      blocks_snapshot_id:
+        description: 'EBS snapshot ID with pre-synced blocks (empty = sync from scratch)'
+        required: false
+        default: ''
+
+env:
+  AWS_REGION: eu-central-1
+  # AMI: Ubuntu 22.04 LTS arm64 (eu-central-1) — update if needed
+  # For x86_64 use ami-0faab6bdbac9486fb (Ubuntu 22.04 amd64)
+  EC2_AMI: ami-0a261c0e5f51090b1
+  EC2_SECURITY_GROUP: ${{ secrets.EC2_SECURITY_GROUP }}
+  EC2_SUBNET: ${{ secrets.EC2_SUBNET }}
+  EC2_KEY_NAME: ${{ secrets.EC2_KEY_NAME }}
+  SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Launch EC2 instance
+        id: ec2
+        run: |
+          # Build block device mappings
+          # Root volume always 100GB gp3
+          BLOCK_DEVICES='[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3"}}'
+
+          # If snapshot ID provided, attach blocks volume from snapshot
+          SNAPSHOT_ID="${{ github.event.inputs.blocks_snapshot_id }}"
+          if [ -n "$SNAPSHOT_ID" ]; then
+            BLOCK_DEVICES="${BLOCK_DEVICES},{\"DeviceName\":\"/dev/sdf\",\"Ebs\":{\"SnapshotId\":\"${SNAPSHOT_ID}\",\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}"
+            echo "Using EBS snapshot for blocks: $SNAPSHOT_ID"
+          fi
+          BLOCK_DEVICES="${BLOCK_DEVICES}]"
+
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ${{ env.EC2_AMI }} \
+            --instance-type ${{ github.event.inputs.instance_type }} \
+            --key-name ${{ env.EC2_KEY_NAME }} \
+            --security-group-ids ${{ env.EC2_SECURITY_GROUP }} \
+            --subnet-id ${{ env.EC2_SUBNET }} \
+            --block-device-mappings "$BLOCK_DEVICES" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=bitcoin-benchmark-${{ github.run_id }}}]" \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Launched instance: $INSTANCE_ID"
+
+          # Wait for instance to be running
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+
+          # Get public IP
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids $INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "Instance IP: $PUBLIC_IP"
+
+      - name: Wait for SSH
+        run: |
+          echo "${{ env.SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+          chmod 600 /tmp/ec2_key.pem
+
+          for i in $(seq 1 30); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+              -i /tmp/ec2_key.pem ubuntu@${{ steps.ec2.outputs.public_ip }} \
+              "echo ready"; then
+              echo "SSH ready"
+              break
+            fi
+            echo "Waiting for SSH... ($i/30)"
+            sleep 10
+          done
+
+      - name: Setup EC2 environment
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
+            ubuntu@${{ steps.ec2.outputs.public_ip }} << 'SETUP'
+          set -ex
+
+          # Install Docker
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq docker.io git ca-certificates
+          sudo systemctl start docker
+          sudo usermod -aG docker ubuntu
+
+          # Clone repository
+          cd /home/ubuntu
+          git clone --depth=1 --branch=${{ github.ref_name }} \
+            https://github.com/${{ github.repository }}.git bitcoin
+
+          # Create block data directory
+          sudo mkdir -p /data/blocks
+          sudo chown ubuntu:ubuntu /data/blocks
+          SETUP
+
+      - name: Sync block data (first 200K blocks)
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
+            ubuntu@${{ steps.ec2.outputs.public_ip }} << 'SYNC'
+          set -ex
+
+          SNAPSHOT_ID="${{ github.event.inputs.blocks_snapshot_id }}"
+
+          if [ -n "$SNAPSHOT_ID" ]; then
+            # ===== EBS SNAPSHOT PATH =====
+            # Mount the pre-synced blocks volume from snapshot
+            echo "Using EBS snapshot: mounting /dev/xvdf → /data/blocks"
+
+            sudo mkdir -p /data/blocks
+
+            # Wait for device to appear
+            for i in $(seq 1 30); do
+              if [ -b /dev/xvdf ] || [ -b /dev/nvme1n1 ]; then
+                break
+              fi
+              echo "Waiting for EBS device... ($i/30)"
+              sleep 2
+            done
+
+            # Detect device name (varies by instance type)
+            if [ -b /dev/nvme1n1 ]; then
+              DEVICE=/dev/nvme1n1
+            elif [ -b /dev/xvdf ]; then
+              DEVICE=/dev/xvdf
+            else
+              echo "ERROR: EBS device not found"
+              exit 1
+            fi
+
+            # Mount (filesystem already exists on snapshot)
+            sudo mount $DEVICE /data/blocks
+            echo "EBS mounted. Block files: $(ls /data/blocks/blk*.dat 2>/dev/null | wc -l)"
+
+          else
+            # ===== SYNC FROM SCRATCH PATH =====
+            echo "No snapshot provided. Syncing blocks from mainnet..."
+
+            sudo mkdir -p /data/blocks
+            sudo chown ubuntu:ubuntu /data/blocks
+
+            cd /home/ubuntu/bitcoin
+
+            # Build bitcoind (minimal, just for block sync)
+            sudo apt-get install -y -qq cmake make g++ pkg-config \
+              libboost-dev libevent-dev libsqlite3-dev systemtap-sdt-dev
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF \
+              -DWITH_ZMQ=OFF -DENABLE_WALLET=OFF -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF
+            cmake --build build -j$(nproc) --target bitcoind
+
+            # Sync first 200K blocks from mainnet
+            mkdir -p /home/ubuntu/.bitcoin
+            ./build/bin/bitcoind -daemon -stopatheight=200001 -dbcache=2048 -prune=0
+
+            # Wait for sync to complete (bitcoind exits at stopatheight)
+            echo "Syncing blocks 0-200000 from mainnet..."
+            while pgrep -x bitcoind > /dev/null; do
+              BLOCKS=$(./build/bin/bitcoin-cli getblockcount 2>/dev/null || echo "starting...")
+              echo "  Height: $BLOCKS"
+              sleep 30
+            done
+            echo "Sync complete"
+
+            # Copy block files to benchmark directory
+            cp /home/ubuntu/.bitcoin/blocks/blk*.dat /data/blocks/
+            echo "Block files ready: $(ls /data/blocks/blk*.dat | wc -l) files"
+          fi
+          SYNC
+
+      - name: Build benchmark Docker image
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
+            ubuntu@${{ steps.ec2.outputs.public_ip }} << 'BUILD'
+          set -ex
+          cd /home/ubuntu/bitcoin
+
+          sudo docker build \
+            -f contrib/perf/docker/Dockerfile.reindex_benchmark \
+            -t bitcoin-reindex-benchmark .
+
+          echo "Docker image built successfully"
+          BUILD
+
+      - name: Run benchmark
+        id: benchmark
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
+            ubuntu@${{ steps.ec2.outputs.public_ip }} << 'BENCH'
+          set -ex
+          cd /home/ubuntu/bitcoin
+
+          # Run isolated benchmark with warmup
+          sudo python3 contrib/perf/run_benchmark_isolated.py \
+            --block-dir /data/blocks \
+            --stop-height ${{ github.event.inputs.stop_height }} \
+            --conditions ${{ github.event.inputs.conditions }} \
+            --image bitcoin-reindex-benchmark \
+            --results-dir /home/ubuntu/benchmark_results
+
+          echo "=== RESULTS ==="
+          cat /home/ubuntu/benchmark_results/report.json
+          BENCH
+
+      - name: Fetch results
+        run: |
+          scp -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem -r \
+            ubuntu@${{ steps.ec2.outputs.public_ip }}:/home/ubuntu/benchmark_results \
+            ./benchmark_results
+
+          echo "Results fetched:"
+          ls -la ./benchmark_results/
+          cat ./benchmark_results/report.json
+
+      - name: Commit results to repo
+        if: ${{ github.event.inputs.commit_results == 'true' }}
+        run: |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          RESULTS_DIR=".github/benchmark-results/${TIMESTAMP}"
+          mkdir -p "$RESULTS_DIR"
+          cp ./benchmark_results/*.json "$RESULTS_DIR/"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$RESULTS_DIR"
+          git commit -m "perf: Add benchmark results ${TIMESTAMP} [skip ci]
+
+          Instance: ${{ github.event.inputs.instance_type }}
+          Region: ${{ env.AWS_REGION }}
+          Stop height: ${{ github.event.inputs.stop_height }}
+          Conditions: ${{ github.event.inputs.conditions }}"
+          git push
+
+      - name: Print results summary
+        if: always()
+        run: |
+          if [ -f ./benchmark_results/report.json ]; then
+            echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+          import json
+          r = json.load(open('./benchmark_results/report.json'))
+          for c in r.get('results', []):
+              name = c['name']
+              t = c.get('elapsed_s', '-')
+              bps = c.get('blocks_per_second', '-')
+              oh = c.get('overhead_pct')
+              oh_str = f'{oh:.2f}%' if oh is not None else '—'
+              ev = c.get('events', 0)
+              st = c.get('status', '?')
+              print(f'| {name:<12} | {t:>8} | {bps:>8} | {oh_str:>10} | {ev:>10} | {st:<8} |')
+          "
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Terminate EC2 instance
+        if: always()
+        run: |
+          if [ -n "${{ steps.ec2.outputs.instance_id }}" ]; then
+            aws ec2 terminate-instances \
+              --instance-ids ${{ steps.ec2.outputs.instance_id }}
+            echo "Instance ${{ steps.ec2.outputs.instance_id }} terminated"
+          fi
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f /tmp/ec2_key.pem

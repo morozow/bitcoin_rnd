@@ -228,6 +228,10 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/mini_miner.cpp
   node/minisketchwrapper.cpp
   node/peerman_args.cpp
+  node/stdio_bus_hooks.cpp
+  node/stdio_bus_observer.cpp
+  node/stdio_bus_sdk_hooks.cpp
+  node/stdio_bus_raw_pipe_hooks.cpp
   node/psbt.cpp
   node/timeoffsets.cpp
   node/transaction.cpp
@@ -287,6 +291,19 @@ target_link_libraries(bitcoin_node
     $<TARGET_NAME_IF_EXISTS:libevent::pthreads>
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
+
+# stdio_bus SDK integration via FetchContent
+include(FetchContent)
+FetchContent_Declare(
+  stdiobus
+  GIT_REPOSITORY https://github.com/stdiobus/stdiobus-cpp.git
+  GIT_TAG v1.0.0
+)
+set(STDIOBUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(STDIOBUS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(stdiobus)
+target_link_libraries(bitcoin_node PRIVATE stdiobus::stdiobus)
+message(STATUS "stdio_bus: Using stdiobus-cpp v1.0.0 via FetchContent")
 if(WITH_EMBEDDED_ASMAP)
   target_compile_definitions(bitcoin_node PRIVATE ENABLE_EMBEDDED_ASMAP=1)
   include(TargetDataSources)

@@ -9,6 +9,7 @@
 #include <consensus/amount.h>
 #include <consensus/validation.h>
 #include <interfaces/chain.h>
+#include <node/stdio_bus_hooks.h>
 #include <node/types.h>
 #include <numeric>
 #include <policy/policy.h>
@@ -1241,6 +1242,19 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
            result.GetWaste(),
            result.GetSelectedValue());
 
+    // stdio_bus USDT-mirror (coin_selection:selected_coins)
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::CoinSelectionSelectedCoinsEvent ev{
+            .wallet_name = wallet.GetName(),
+            .algorithm = GetAlgorithmName(result.GetAlgo()),
+            .target = result.GetTarget(),
+            .waste = result.GetWaste(),
+            .selected_value = result.GetSelectedValue(),
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnCoinSelectionSelectedCoins(ev);
+    }
+
     // vouts to the payees
     txNew.vout.reserve(vecSend.size() + 1); // + 1 because of possible later insert
     for (const auto& recipient : vecSend)
@@ -1460,11 +1474,33 @@ util::Result<CreatedTransactionResult> CreateTransaction(
            bool(res),
            res ? res->fee : 0,
            res && res->change_pos.has_value() ? int32_t(*res->change_pos) : -1);
+
+    // stdio_bus USDT-mirror (coin_selection:normal_create_tx_internal)
+    if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+        node::CoinSelectionNormalCreateTxEvent ev{
+            .wallet_name = wallet.GetName(),
+            .success = bool(res),
+            .fee = res ? res->fee : 0,
+            .change_pos = res && res->change_pos.has_value() ? int32_t(*res->change_pos) : -1,
+            .timestamp_us = node::GetMonotonicTimeUs(),
+        };
+        hooks->OnCoinSelectionNormalCreateTx(ev);
+    }
     if (!res) return res;
     const auto& txr_ungrouped = *res;
     // try with avoidpartialspends unless it's enabled already
     if (txr_ungrouped.fee > 0 /* 0 means non-functional fee rate estimation */ && wallet.m_max_aps_fee > -1 && !coin_control.m_avoid_partial_spends) {
         TRACEPOINT(coin_selection, attempting_aps_create_tx, wallet.GetName().c_str());
+
+        // stdio_bus USDT-mirror (coin_selection:attempting_aps_create_tx)
+        if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+            node::CoinSelectionAttemptingApsEvent ev{
+                .wallet_name = wallet.GetName(),
+                .timestamp_us = node::GetMonotonicTimeUs(),
+            };
+            hooks->OnCoinSelectionAttemptingAps(ev);
+        }
+
         CCoinControl tmp_cc = coin_control;
         tmp_cc.m_avoid_partial_spends = true;
 
@@ -1482,6 +1518,20 @@ util::Result<CreatedTransactionResult> CreateTransaction(
                txr_grouped.has_value(),
                txr_grouped.has_value() ? txr_grouped->fee : 0,
                txr_grouped.has_value() && txr_grouped->change_pos.has_value() ? int32_t(*txr_grouped->change_pos) : -1);
+
+        // stdio_bus USDT-mirror (coin_selection:aps_create_tx_internal)
+        if (auto hooks = node::GetGlobalStdioBusHooks(); hooks && hooks->Enabled()) {
+            node::CoinSelectionApsCreateTxEvent ev{
+                .wallet_name = wallet.GetName(),
+                .use_aps = use_aps,
+                .success = txr_grouped.has_value(),
+                .fee = txr_grouped.has_value() ? txr_grouped->fee : 0,
+                .change_pos = (txr_grouped.has_value() && txr_grouped->change_pos.has_value())
+                    ? int32_t(*txr_grouped->change_pos) : -1,
+                .timestamp_us = node::GetMonotonicTimeUs(),
+            };
+            hooks->OnCoinSelectionApsCreateTx(ev);
+        }
         if (txr_grouped) {
             wallet.WalletLogPrintf("Fee non-grouped = %lld, grouped = %lld, using %s\n",
                 txr_ungrouped.fee, txr_grouped->fee, use_aps ? "grouped" : "non-grouped");
