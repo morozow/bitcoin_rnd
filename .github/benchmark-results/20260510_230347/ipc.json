@@ -1,0 +1,16 @@
+{
+  "condition": "ipc",
+  "parsed": {
+    "name": "ipc",
+    "elapsed_s": null,
+    "blocks_per_second": null,
+    "overhead_pct": null,
+    "events": 0,
+    "status": "UNKNOWN",
+    "error": null
+  },
+  "returncode": 1,
+  "wall_time_s": 426.6247816939999,
+  "stdout": "Reindex Mainnet Benchmark\n  Block dir:    /blocks\n  Stop height:  200000\n  Conditions:   ipc\n  Cache flush:  yes\n  Output:       benchmark_report.json\n\n",
+  "stderr": "2026-05-10 22:48:57 [INFO] __main__: Validating block data in /blocks...\n2026-05-10 22:56:03 [ERROR] __main__: Block validation failed: Insufficient blocks: found 0, need at least 10000. Provide more mainnet blk*.dat files in /blocks\nERROR: Insufficient blocks: found 0, need at least 10000. Provide more mainnet blk*.dat files in /blocks\n"
+}

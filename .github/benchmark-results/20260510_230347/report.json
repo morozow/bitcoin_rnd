@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-05-10T23:03:10.231322+00:00",
+  "config": {
+    "image": "bitcoin-reindex-benchmark",
+    "block_dir": "/data/blocks",
+    "stop_height": 200000,
+    "conditions": [
+      "baseline",
+      "ebpf",
+      "ebpf_full",
+      "ipc",
+      "raw_ipc"
+    ],
+    "cache_flush": true
+  },
+  "baseline_time_s": null,
+  "results": [
+    {
+      "name": "baseline",
+      "elapsed_s": null,
+      "blocks_per_second": null,
+      "overhead_pct": null,
+      "events": 0,
+      "status": "UNKNOWN",
+      "error": null
+    },
+    {
+      "name": "ebpf",
+      "elapsed_s": null,
+      "blocks_per_second": null,
+      "overhead_pct": null,
+      "events": 0,
+      "status": "UNKNOWN",
+      "error": null
+    },
+    {
+      "name": "ebpf_full",
+      "elapsed_s": null,
+      "blocks_per_second": null,
+      "overhead_pct": null,
+      "events": 0,
+      "status": "UNKNOWN",
+      "error": null
+    },
+    {
+      "name": "ipc",
+      "elapsed_s": null,
+      "blocks_per_second": null,
+      "overhead_pct": null,
+      "events": 0,
+      "status": "UNKNOWN",
+      "error": null
+    },
+    {
+      "name": "raw_ipc",
+      "elapsed_s": null,
+      "blocks_per_second": null,
+      "overhead_pct": null,
+      "events": 0,
+      "status": "UNKNOWN",
+      "error": null
+    }
+  ]
+}
