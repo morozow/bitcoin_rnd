@@ -233,40 +233,35 @@ jobs:
       - name: Run benchmark
         id: benchmark
         run: |
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=60 \
-            -i /tmp/ec2_key.pem ubuntu@${{ steps.ec2.outputs.public_ip }} << 'BENCH'
-          set -ex
-          cd /home/ubuntu/bitcoin
+          # Recreate key (each step is a fresh shell)
+          printf '%s' "${{ env.SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+          chmod 600 /tmp/ec2_key.pem
 
-          # Run in background with nohup to survive SSH disconnects
-          nohup sudo python3 contrib/perf/run_benchmark_isolated.py \
-            --block-dir /data/blocks \
-            --stop-height ${{ github.event.inputs.stop_height }} \
-            --conditions ${{ github.event.inputs.conditions }} \
-            --image bitcoin-reindex-benchmark \
-            --results-dir /home/ubuntu/benchmark_results \
-            > /home/ubuntu/benchmark_stdout.log 2>&1 &
+          IP=${{ steps.ec2.outputs.public_ip }}
+          SSH="ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -i /tmp/ec2_key.pem ubuntu@${IP}"
 
-          BENCH_PID=$!
-          echo "Benchmark started (PID: $BENCH_PID)"
+          # Start benchmark in background on EC2
+          $SSH "cd /home/ubuntu/bitcoin && nohup sudo python3 contrib/perf/run_benchmark_isolated.py --block-dir /data/blocks --stop-height ${{ github.event.inputs.stop_height }} --conditions ${{ github.event.inputs.conditions }} --image bitcoin-reindex-benchmark --results-dir /home/ubuntu/benchmark_results > /home/ubuntu/benchmark_stdout.log 2>&1 &"
 
-          # Poll for completion
-          while ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
-            -i /tmp/ec2_key.pem ubuntu@${{ steps.ec2.outputs.public_ip }} \
-            "pgrep -f run_benchmark_isolated" > /dev/null 2>&1; do
-            echo "Benchmark still running... ($(date))"
+          echo "Benchmark started on EC2"
+
+          # Poll for completion (check every 60s)
+          sleep 30
+          while $SSH "pgrep -f run_benchmark_isolated" > /dev/null 2>&1; do
+            echo "Benchmark still running... ($(date +%H:%M:%S))"
             sleep 60
           done
 
           echo "Benchmark completed"
 
           # Fetch output
-          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
-            ubuntu@${{ steps.ec2.outputs.public_ip }} \
-            "cat /home/ubuntu/benchmark_stdout.log"
+          $SSH "cat /home/ubuntu/benchmark_stdout.log"
 
       - name: Fetch results
         run: |
+          printf '%s' "${{ env.SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+          chmod 600 /tmp/ec2_key.pem
+
           scp -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem -r \
             ubuntu@${{ steps.ec2.outputs.public_ip }}:/home/ubuntu/benchmark_results \
             ./benchmark_results
