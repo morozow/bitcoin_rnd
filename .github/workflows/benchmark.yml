@@ -26,9 +26,6 @@ on:
 
 env:
   AWS_REGION: eu-central-1
-  # AMI: Ubuntu 22.04 LTS arm64 (eu-central-1) — update if needed
-  # For x86_64 use ami-0faab6bdbac9486fb (Ubuntu 22.04 amd64)
-  EC2_AMI: ami-0a261c0e5f51090b1
   EC2_SECURITY_GROUP: ${{ secrets.EC2_SECURITY_GROUP }}
   EC2_SUBNET: ${{ secrets.EC2_SUBNET }}
   EC2_KEY_NAME: ${{ secrets.EC2_KEY_NAME }}
@@ -52,6 +49,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Resolve AMI
+        id: ami
+        run: |
+          AMI_ID=$(aws ssm get-parameters \
+            --names /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id \
+            --query 'Parameters[0].Value' \
+            --output text)
+          echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Resolved AMI: $AMI_ID"
+
       - name: Launch EC2 instance
         id: ec2
         run: |
@@ -68,7 +75,7 @@ jobs:
           BLOCK_DEVICES="${BLOCK_DEVICES}]"
 
           INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id ${{ env.EC2_AMI }} \
+            --image-id ${{ steps.ami.outputs.ami_id }} \
             --instance-type ${{ github.event.inputs.instance_type }} \
             --key-name ${{ env.EC2_KEY_NAME }} \
             --security-group-ids ${{ env.EC2_SECURITY_GROUP }} \
@@ -95,8 +102,13 @@ jobs:
 
       - name: Wait for SSH
         run: |
-          echo "${{ env.SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
+          printf '%s' "${{ env.SSH_PRIVATE_KEY }}" > /tmp/ec2_key.pem
           chmod 600 /tmp/ec2_key.pem
+
+          # Debug: verify key format
+          echo "Key file size: $(wc -c < /tmp/ec2_key.pem) bytes"
+          echo "Key first line: $(head -1 /tmp/ec2_key.pem)"
+          echo "Key last line: $(tail -1 /tmp/ec2_key.pem)"
 
           for i in $(seq 1 30); do
             if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
