@@ -214,6 +214,15 @@ jobs:
             cp /home/ubuntu/.bitcoin/blocks/blk*.dat /data/blocks/
             echo "Block files ready: $(ls /data/blocks/blk*.dat | wc -l) files"
           fi
+
+          # Verify blocks exist
+          BLOCK_COUNT=$(ls /home/ubuntu/.bitcoin/blocks/blk*.dat 2>/dev/null | wc -l)
+          if [ "$BLOCK_COUNT" -eq 0 ]; then
+            echo "ERROR: No block files found after sync!"
+            ls -la /home/ubuntu/.bitcoin/blocks/ || true
+            exit 1
+          fi
+          echo "Verified: $BLOCK_COUNT block files in /home/ubuntu/.bitcoin/blocks/"
           SYNC
 
       - name: Build benchmark Docker image
@@ -241,7 +250,7 @@ jobs:
           SSH="ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -i /tmp/ec2_key.pem ubuntu@${IP}"
 
           # Start benchmark in background on EC2
-          $SSH "cd /home/ubuntu/bitcoin && nohup sudo python3 contrib/perf/run_benchmark_isolated.py --block-dir /data/blocks --stop-height ${{ github.event.inputs.stop_height }} --conditions ${{ github.event.inputs.conditions }} --image bitcoin-reindex-benchmark --results-dir /home/ubuntu/benchmark_results > /home/ubuntu/benchmark_stdout.log 2>&1 &"
+          $SSH "cd /home/ubuntu/bitcoin && nohup sudo python3 contrib/perf/run_benchmark_isolated.py --block-dir /home/ubuntu/.bitcoin/blocks --stop-height ${{ github.event.inputs.stop_height }} --conditions ${{ github.event.inputs.conditions }} --image bitcoin-reindex-benchmark --results-dir /home/ubuntu/benchmark_results > /home/ubuntu/benchmark_stdout.log 2>&1 &"
 
           echo "Benchmark started on EC2"
 
