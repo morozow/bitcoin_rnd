@@ -2,8 +2,6 @@ name: Tracing Overhead Benchmark
 
 on:
   workflow_dispatch:
-    branches:
-      - 'rfc/ebpf-ipc-tracing'
     inputs:
       instance_type:
         description: 'EC2 instance type'
