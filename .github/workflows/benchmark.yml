@@ -233,22 +233,37 @@ jobs:
       - name: Run benchmark
         id: benchmark
         run: |
-          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
-            ubuntu@${{ steps.ec2.outputs.public_ip }} << 'BENCH'
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=60 \
+            -i /tmp/ec2_key.pem ubuntu@${{ steps.ec2.outputs.public_ip }} << 'BENCH'
           set -ex
           cd /home/ubuntu/bitcoin
 
-          # Run isolated benchmark with warmup
-          sudo python3 contrib/perf/run_benchmark_isolated.py \
+          # Run in background with nohup to survive SSH disconnects
+          nohup sudo python3 contrib/perf/run_benchmark_isolated.py \
             --block-dir /data/blocks \
             --stop-height ${{ github.event.inputs.stop_height }} \
             --conditions ${{ github.event.inputs.conditions }} \
             --image bitcoin-reindex-benchmark \
-            --results-dir /home/ubuntu/benchmark_results
+            --results-dir /home/ubuntu/benchmark_results \
+            > /home/ubuntu/benchmark_stdout.log 2>&1 &
 
-          echo "=== RESULTS ==="
-          cat /home/ubuntu/benchmark_results/report.json
-          BENCH
+          BENCH_PID=$!
+          echo "Benchmark started (PID: $BENCH_PID)"
+
+          # Poll for completion
+          while ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+            -i /tmp/ec2_key.pem ubuntu@${{ steps.ec2.outputs.public_ip }} \
+            "pgrep -f run_benchmark_isolated" > /dev/null 2>&1; do
+            echo "Benchmark still running... ($(date))"
+            sleep 60
+          done
+
+          echo "Benchmark completed"
+
+          # Fetch output
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem \
+            ubuntu@${{ steps.ec2.outputs.public_ip }} \
+            "cat /home/ubuntu/benchmark_stdout.log"
 
       - name: Fetch results
         run: |
