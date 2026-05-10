@@ -81,6 +81,10 @@ def parse_args(argv=None):
         "--no-cache-flush", action="store_true",
         help="Skip cache flush between conditions (for debugging)",
     )
+    parser.add_argument(
+        "--no-warmup", action="store_true",
+        help="Skip warmup run (not recommended — causes cache bias in baseline)",
+    )
     return parser.parse_args(argv)
 
 
@@ -191,7 +195,7 @@ def format_table(results, stop_height):
     lines = []
     lines.append("")
     lines.append("=" * 78)
-    lines.append("BENCHMARK RESULTS (isolated runs, cache flushed between conditions)")
+    lines.append("BENCHMARK RESULTS (isolated runs, warm cache, no I/O bias)")
     lines.append("=" * 78)
     lines.append("")
 
@@ -253,8 +257,48 @@ def main(argv=None):
     print(f"  Stop height: {args.stop_height}")
     print(f"  Conditions:  {', '.join(conditions)}")
     print(f"  Results:     {results_dir}")
-    print(f"  Cache flush: {'yes' if not args.no_cache_flush else 'no'}")
+    print(f"  Warmup:      {'yes' if not args.no_warmup else 'no'}")
+    if args.no_warmup:
+        print(f"  Cache flush: {'yes' if not args.no_cache_flush else 'no'}")
+    else:
+        print(f"  Cache flush: skipped (warmup keeps cache warm)")
     print()
+
+    # =========================================================================
+    # WARMUP: Run baseline once to prime all cache layers (host, VM, VirtioFS).
+    # This ensures all subsequent measurements (including the real baseline)
+    # start with identical warm-cache state. Without warmup, the first
+    # condition pays I/O cost that later conditions don't, making overhead%
+    # unreliable.
+    # =========================================================================
+    if not args.no_warmup:
+        print("=" * 78)
+        print("WARMUP: Priming page cache (this run is NOT measured)")
+        print("=" * 78)
+        print("  Running baseline to load all block data into cache...")
+        print("  This ensures all conditions start with identical I/O state.")
+        print()
+
+        warmup_stdout, warmup_stderr, warmup_rc, warmup_elapsed = run_condition(
+            args.image, args.block_dir, args.stop_height, "baseline"
+        )
+
+        if warmup_rc != 0:
+            print(f"  WARNING: Warmup exited with code {warmup_rc}", file=sys.stderr)
+            print(f"  stderr: {warmup_stderr[-500:]}", file=sys.stderr)
+        else:
+            warmup_result = parse_condition_output(warmup_stdout, "baseline")
+            warmup_time = warmup_result.get("elapsed_s")
+            if warmup_time:
+                print(f"  Warmup complete: {warmup_time:.2f}s ({args.stop_height/warmup_time:.1f} blocks/s)")
+            else:
+                print(f"  Warmup complete: {warmup_elapsed:.1f}s wall time")
+
+        print()
+        print("=" * 78)
+        print("MEASUREMENT: Starting real benchmark runs")
+        print("=" * 78)
+        print()
 
     results = []
     baseline_time = None
@@ -263,8 +307,10 @@ def main(argv=None):
         print(f"[{i+1}/{len(conditions)}] Running: {condition}")
         print(f"  {'─' * 50}")
 
-        # Flush caches before each condition
-        if not args.no_cache_flush:
+        # Flush caches before each condition (only if no warmup was done)
+        # With warmup, we KEEP the warm cache — that's the whole point.
+        # Without warmup, flush to at least try for equal cold-cache state.
+        if args.no_warmup and not args.no_cache_flush:
             flush_caches()
 
         # Run the condition
